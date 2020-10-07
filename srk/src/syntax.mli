@@ -78,6 +78,7 @@ end
 
 type ('a, +'typ) expr
 type 'a term = ('a, typ_arith) expr
+type 'a soterm = ('a, 'a typ_fun) expr
 type 'a formula = ('a, typ_bool) expr
 
 val compare_expr : ('a,'typ) expr -> ('a,'typ) expr -> int
@@ -184,7 +185,7 @@ module Expr : sig
     ('a, 'b) expr ->
     unit
   val refine : 'a context -> ('a, typ_fo) expr -> [ `Term of 'a term
-                                                  | `Formula of 'a formula ]
+                                                  | `Formula of 'a formula]
 
   (** Convert an expression to a term.  Raise [Invalid_arg] if the
      expression is not a term. *)
@@ -300,6 +301,34 @@ module Term : sig
   val eval : 'a context -> (('b, 'a) open_term -> 'b) -> 'a term -> 'b
   val eval_partial : 'a context -> (('b, 'a) open_term -> 'b option) -> 'a term -> 'b option
 end
+
+type ('a,'b) open_soterm = [
+  | `Real of QQ.t
+  | `App of symbol * (('b, typ_fo) expr list)
+  | `Var of int * typ_arith
+  | `Add of 'a list
+  | `Mul of 'a list
+  | `Binop of [ `Div | `Mod ] * 'a * 'a
+  | `Unop of [ `Floor | `Neg ] * 'a
+  | `Ite of ('b formula) * 'a * 'a
+]
+
+module SOTerm : sig
+  type 'a t = 'a soterm
+  val equal : 'a soterm -> 'a soterm -> bool
+  val compare : 'a soterm -> 'a soterm -> int
+  val hash : 'a soterm -> int
+  val pp : ?env:(string Env.t) -> 'a context ->
+    Format.formatter -> 'a soterm -> unit
+  val show : ?env:(string Env.t) -> 'a context -> 'a soterm -> string
+  val destruct : 'a context -> 'a soterm -> ('a soterm, 'a) open_soterm
+  val eval : 'a context -> (('b, 'a) open_soterm -> 'b) -> 'a soterm -> 'b
+  val eval_partial : 'a context -> (('b, 'a) open_soterm -> 'b option) -> 'a soterm -> 'b option
+end
+
+
+val mk_get : 'a context -> 'a soterm -> 'a term -> 'a soterm
+val mk_set : 'a context -> 'a soterm -> 'a term -> 'a soterm -> 'a soterm
 
 (** {2 Formulas} *)
 

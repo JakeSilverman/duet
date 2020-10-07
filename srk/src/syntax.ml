@@ -34,6 +34,14 @@ let pp_typ formatter = function
 
 let subtype s t = s = t || (s = `TyInt && t = `TyReal)
 
+let typ_fo_of_typ (typ : typ) = 
+  match typ with
+  | `TyFun ([], fo) -> fo
+  | `TyFun (_, _) -> invalid_arg "Not fo type"
+  | `TyInt -> `TyInt
+  | `TyReal -> `TyReal
+  | `TyBool -> `TyBool
+
 type label =
   | True
   | False
@@ -55,10 +63,13 @@ type label =
   | Neg
   | Real of QQ.t
   | Ite
+  | Get
+  | Set
 
-type sexpr = Node of label * ((sexpr hobj) list) * typ_fo
+type sexpr = Node of label * ((sexpr hobj) list) * typ
 type ('a,'typ) expr = sexpr hobj
 type 'a term = ('a, typ_arith) expr
+type 'a soterm = ('a, 'a typ_fun) expr
 type 'a formula = ('a, typ_bool) expr
 
 let compare_expr s t = Stdlib.compare s.tag t.tag
@@ -283,6 +294,9 @@ let mk_idiv srk s t =
     (mk_iff srk s_pos t_pos)
     (mk_floor srk div)
     (mk_ceiling srk div)
+
+let mk_get srk f t = srk.mk Get [f; t]
+let mk_set srk f i v = srk.mk Set [f; i; v]
 
 (* Avoid capture by incrementing bound variables *)
 let rec decapture srk depth incr sexpr =
@@ -710,17 +724,20 @@ module Expr = struct
     | Node (_, _, `TyInt) -> `Term sexpr
     | Node (_, _, `TyReal) -> `Term sexpr
     | Node (_, _, `TyBool) -> `Formula sexpr
+    | Node (_, _, `TyFun _) -> assert false (* Intuiveitly, this should give SOTerm, but then this breaks basically everything *)
 
   let term_of _srk sexpr =
     match sexpr.obj with
     | Node (_, _, `TyInt)
     | Node (_, _, `TyReal) -> sexpr
-    | Node (_, _, `TyBool) -> invalid_arg "Syntax.term_of: not a term"
+    | Node (_, _, `TyBool) 
+    | Node (_, _, `TyFun _) -> invalid_arg "Syntax.term_of: not a term"
 
   let formula_of _srk sexpr =
     match sexpr.obj with
     | Node (_, _, `TyInt)
-    | Node (_, _, `TyReal) -> invalid_arg "Syntax.formula_of: not a formula"
+    | Node (_, _, `TyReal) 
+    | Node (_, _, `TyFun _ ) -> invalid_arg "Syntax.formula_of: not a formula"
     | Node (_, _, `TyBool) -> sexpr
 
   let pp = pp_expr
@@ -1053,14 +1070,14 @@ let quantify_consts srk qt p phi =
 let mk_exists_consts srk = quantify_consts srk `Exists
 let mk_forall_consts srk = quantify_consts srk `Forall
 
-let node_typ symbols label children =
+let node_typ (symbols : (string * typ) DynArray.t)  label children : typ =
   match label with
   | Real qq ->
     begin match QQ.to_zz qq with
       | Some _ -> `TyInt
       | None -> `TyReal
     end
-  | Var (_, typ) -> typ
+  | Var (_, typ) -> (typ :> typ)
   | App func ->
     begin match snd (DynArray.get symbols func) with
       | `TyFun (args, ret) ->
@@ -1068,10 +1085,10 @@ let node_typ symbols label children =
           invalid_arg "Arity mis-match in function application";
         if (BatList.for_all2
               (fun typ { obj = Node (_, _, typ'); _ } -> subtype typ' typ)
-              args
+              (args :> typ list)
               children)
         then
-          ret
+          (ret :> typ)
         else
           invalid_arg "Mis-matched types in function application"
       | `TyInt when children = [] -> `TyInt
@@ -1107,18 +1124,48 @@ let node_typ symbols label children =
         end
       | _ -> assert false
     end
+  | Get -> 
+    begin match children with
+      | [so; t] ->
+        begin match so.obj, t.obj with
+          | Node (_, _, `TyFun (a, b)), Node (_, _, fo_typ) -> 
+            if typ_fo_of_typ fo_typ = List.hd a then `TyFun (List.tl a, b)
+            else invalid_arg "Mis-matched types in function application" 
+          | _ -> invalid_arg "Mis-matched types in function application"
+        end
+      | _ -> assert false
+    end
+  | Set ->
+    begin match children with
+      | [f; i; v] ->
+        begin match f.obj, i.obj, v.obj with
+          | Node (_, _, `TyFun (a, b)), 
+            Node (_, _, fo_typ), 
+            Node (_, _, `TyFun (c, d)) ->
+            if typ_fo_of_typ fo_typ = List.hd a && List.tl a = c && b = d then
+              `TyFun (a, b)
+            else 
+              invalid_arg "Mis-matched types in function application" 
+          | _ -> invalid_arg "Mis-matched types in function application"
+        end
+      | _ -> assert false
+    end
+
+
 
 let term_typ _ node =
   match node.obj with
   | Node (_, _, `TyInt) -> `TyInt
   | Node (_, _, `TyReal) -> `TyReal
-  | Node (_, _, `TyBool) -> invalid_arg "term_typ: not an arithmetic term"
+  | Node (_, _, `TyBool)
+  | Node (_, _, `TyFun _) -> invalid_arg "term_typ: not an arithmetic term"
 
 let expr_typ _ node =
   match node.obj with
   | Node (_, _, `TyInt) -> `TyInt
   | Node (_, _, `TyReal) -> `TyReal
   | Node (_, _, `TyBool) -> `TyBool
+  | Node (_, _, `TyFun t) -> `TyFun t
 
 type 'a rewriter = ('a, typ_fo) expr -> ('a, typ_fo) expr
 
