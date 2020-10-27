@@ -217,13 +217,13 @@ let spec_list = [
   ("-chc",
    Arg.String (fun file ->
        let open Iteration in
-       let fp = Chc.Fp.create () in
+       let fp = Chc.create () in
        let fp = load_chc fp file in
        let pd = 
          (module Product(LinearRecurrenceInequation)(PolyhedronGuard) : PreDomain) 
        in (*TODO: let user pick iter operation*)
-       let rels = Chc.Fp.get_relations_used fp in
-       let sln = Chc.Fp.solve srk fp pd in
+       let rels = Chc.get_relations_used fp in
+       let sln = Chc.solve srk fp pd in
        Format.printf "(Solution is:\n@[";
        SrkUtil.pp_print_enum
          ~pp_sep:(fun formatter () -> Format.fprintf formatter "@ \n ")
