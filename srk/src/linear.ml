@@ -392,9 +392,9 @@ module QQVectorSpace = struct
   let dimension = List.length
 end
 
-(* Affine expressions over constant symbols.  dim_of_sym, const_dim, and
-   sym_of_dim are used to translate between symbols and the dimensions of the
-   coordinate space. *)
+(* Affine expressions over constant symbols and free variables.  dim_of_sym, 
+ * const_dim, dim_of_fv, and sym_of_dim and sym_of_fv are used to translate 
+ * between symbols/fvs and the dimensions of the coordinate space. *)
 
 exception Nonlinear
 
@@ -405,6 +405,12 @@ let sym_of_dim dim =
   else None
 
 let dim_of_sym k = int_of_symbol k
+
+(* fv 0 is mapped to -2; 1 is mapped to -3...*)
+let fv_of_dim dim = 
+  if fv <= -2 then Some -1*dim - 2
+
+let dim_of_fv k = -1 * k - 2
 
 let const_linterm k = QQVector.of_term k const_dim
 
@@ -435,7 +441,8 @@ let linterm_of srk term =
   let alg = function
     | `Real qq -> real qq
     | `App (k, []) -> of_term QQ.one (dim_of_sym k)
-    | `Var (_, _) | `App (_, _) -> raise Nonlinear
+    | `Var (k, _) -> of_term QQ.one (dim_of_fv k)
+    | `App (_, _) -> raise Nonlinear
     | `Add sum -> List.fold_left add zero sum
     | `Mul sum -> List.fold_left mul (real QQ.one) sum
     | `Binop (`Div, x, y) -> scalar_mul (QQ.inverse (nonzero_qq_of y)) x
@@ -450,11 +457,18 @@ let of_linterm srk linterm =
   let open QQVector in
   enum linterm
   /@ (fun (coeff, dim) ->
-      match sym_of_dim dim with
-      | Some k ->
+      if is_some (sym_of_dim dim) then
+        let k = Option.get (sym_of_dim dim) in
         if QQ.equal coeff QQ.one then mk_const srk k
         else mk_mul srk [mk_real srk coeff; mk_const srk k]
-      | None -> mk_real srk coeff)
+      else if is_some (fv_of_dim dim) then
+        (* TODO: of_linterm srk (linterm_of srk term) does not preserve type info of free vars
+         * This can be encoded using the dimension *)
+        let k = Option.get (fv_of_dim dim) in
+        if QQ.equal coeff QQ.one then 
+          mk_var srk k `TyReal
+        else mk_mul srk [mk_real srk coeff; mk_var srk k `TyReal]
+      else mk_real srk coeff)
   |> BatList.of_enum
   |> mk_add srk
 
@@ -464,9 +478,11 @@ let pp_linterm srk formatter linterm =
 let evaluate_linterm interp term =
   (QQVector.enum term)
   /@ (fun (coeff, dim) ->
-      match sym_of_dim dim with
-      | Some const -> QQ.mul (interp const) coeff
-      | None -> coeff)
+      if Option.is_some (fv_of_dim dim) 
+      then failwith "Cannot evaluate_linterm for linterm w/ free vars"
+      else match sym_of_dim dim with
+        | Some const -> QQ.mul (interp const) coeff
+        | None -> coeff)
   |> BatEnum.fold QQ.add QQ.zero
 
 let evaluate_affine m term =

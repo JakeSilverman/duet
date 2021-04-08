@@ -2300,3 +2300,197 @@ let local_project_cube srk exists model cube =
       |> List.filter (not % is_true))
     project
     cube
+
+(* Given a list of equalities, find a candidate
+ * term to substitute in for var 0 *)
+let get_subst_candidate srk eqs = 
+  let unfil_candidates = 
+    List.map (fun (f1, t1, f2, t2) -> 
+        match Term.destruct srk t1, Term.destruct srk t2 with
+        | `Var (ind1, _), `Var (ind2, _) when ind1 = 0 && (not (ind2 = 0)) ->
+          Some t2
+        | `Var (ind1, _), `Var (ind2, _) when (not (ind1 = 0)) && ind2 = 0 ->
+          Some t1
+        | `Var(ind, _), _ when ind = 0 ->
+          if not (DecMap.mem 0 f2)
+          then Some t2
+          else None
+        | _, `Var(ind, _) when ind = 0 -> 
+          if not (DecMap.mem 0 f1) 
+          then Some t1
+          else None
+        | _, _ ->  None) eqs
+  in
+  let filtered_candidates = 
+    List.filter (fun cand ->
+        match cand with
+        | Some _ -> true
+        | None -> false) 
+      unfil_candidates
+  in
+  if List.length filtered_candidates = 0 then None
+  else (List.hd filtered_candidates)
+
+
+let eq_guided_qe srk phi =
+  (* TODO: improve intersect *)
+  let intersect _ = [] in
+  let union lsts = List.flatten lsts in
+  let free_vars_map expr = DecMap.of_enum (BatHashtbl.enum (free_vars expr)) in
+  let alg = function
+    | `Tru -> ([], [], mk_true srk)
+    | `Fls -> ([], [], mk_false srk)
+    | `Atom (`Eq, x, y) -> 
+        ([free_vars_map x, x, free_vars_map y, y], [], mk_eq srk x y)
+    (* TODO: May be nice to use lt and leq terms to determine additional equalities *)
+    | `Atom (`Lt, x, y) -> ([], [], mk_lt srk x y)
+    | `Atom (`Leq, x, y) -> ([], [], mk_leq srk x y)
+    | `And conjuncts ->
+      let (eqs, diseqs, conjs) = 
+        List.fold_left (fun (eqs, diseqs, conjs) (eq, diseq, conj) ->
+            eq :: eqs, diseq :: diseqs, conj :: conjs)
+          ([], [], [])
+          conjuncts
+      in
+      union eqs, intersect diseqs, mk_and srk conjs
+    | `Or disjuncts ->
+       let (eqs, diseqs, disjs) = 
+        List.fold_left (fun (eqs, diseqs, disjs) (eq, diseq, disj) ->
+            eq :: eqs, diseq :: diseqs, disj :: disjs)
+          ([], [], [])
+          disjuncts
+      in
+      intersect eqs, union diseqs, mk_or srk disjs
+    | `Quantify (qtyp, name, typ, (eqs, diseqs, phi)) ->
+      let q_fun, cand_lst = 
+        if qtyp = `Forall then mk_forall, diseqs else mk_exists, eqs
+      in
+      let subst_term = get_subst_candidate srk cand_lst in
+      (* TODO: Better to just do one big subst at end *)
+      let subst ind0 phi =
+        substitute_with_typ srk (fun (ind, typ) ->
+          if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
+          phi
+      in
+      let fls _ = assert false in
+      let sub_pairs ind0 lst = 
+        List.map (fun ((f1, t1, f2, t2)) -> 
+          DecMap.dec 1 f1, subst ind0 t1, DecMap.dec 1 f2, subst ind0 t2) 
+        lst
+      in
+      begin match subst_term with
+      | None ->
+        let filter_pairs lst = 
+          List.filter (fun (f1, _, f2, _) -> 
+            (not (DecMap.mem 0 f1)) &&
+            (not (DecMap.mem 0 f2)))
+          lst
+        in
+        let eqs = sub_pairs fls (filter_pairs eqs) in
+        let diseqs = sub_pairs fls (filter_pairs diseqs) in
+        eqs, diseqs, q_fun srk ~name typ phi
+      | Some t ->
+        let t' _ = subst fls t in
+        let eqs = sub_pairs t' eqs in
+        let diseqs = sub_pairs t' diseqs in
+        eqs, diseqs, subst t' phi
+      end
+    | `Not (eqs, diseqs, phi) -> (diseqs, eqs, mk_not srk phi)
+    | `Proposition (`Var ind) -> ([], [], mk_var srk ind `TyBool) 
+    | `Proposition (`App (f, args)) -> ([], [], mk_app srk f args)
+    | `Ite ((_, _, cond), (eq2, diseq2, bthen), (eq3, diseq3, belse)) -> 
+      intersect [eq2; eq3], diseq2 @ diseq3, mk_ite srk cond bthen belse
+    | _ -> assert false
+  in
+  let _, _, phi = Formula.eval srk alg phi in
+  phi
+
+
+
+
+let eq_guided_qe srk phi =
+  (* TODO: improve intersect *)
+  let intersect _ = [] in
+  let union lsts = List.flatten lsts in
+  let free_vars_map expr = DecMap.of_enum (BatHashtbl.enum (free_vars expr)) in
+  let alg = function
+    | `Tru -> (BatMap.empty, BatMap.empty, mk_true srk)
+    | `Fls -> (BatMap.empty, BatMap.empty, mk_false srk)
+    | `Atom (`Eq, x, y) ->
+      let lt = QQVector.sub (linterm_of srk x) (linterm_of srk y) in
+      let equalities = 
+        BatEnum.fold (fun eqs (scal, dim) -> 
+            if dim < Linear.const_dim then
+              let _, vt = QQVector.pivot dim lt in
+              BatMap.add 
+                (Linear.fv_of_dim dim) 
+                (QQMatrix.of_rows [(QQVector.scala_mul (QQ.negate (QQ.inverse scal)) vt)])
+            else
+              eqs)
+          BatMap.empty
+          (QQVector.enum lt)
+      in
+      equalities, BatMap.empty, mk_eq srk x y
+    | `Atom (`Lt, x, y) -> (BatMap.empty, BatMap.empty, mk_lt srk x y)
+    | `Atom (`Leq, x, y) -> (BatMap.empty, BatMap.empty, mk_leq srk x y)
+    | `And conjuncts -> assert false
+      (*let (eqs, diseqs, conjs) = 
+        List.fold_left (fun (eqs, diseqs, conjs) (eq, diseq, conj) ->
+            eq :: eqs, diseq :: diseqs, conj :: conjs)
+          ([], [], [])
+          conjuncts
+      in
+      union eqs, intersect diseqs, mk_and srk conjs*)
+    | `Or disjuncts -> assert false
+       (*let (eqs, diseqs, disjs) = 
+        List.fold_left (fun (eqs, diseqs, disjs) (eq, diseq, disj) ->
+            eq :: eqs, diseq :: diseqs, disj :: disjs)
+          ([], [], [])
+          disjuncts
+      in
+      intersect eqs, union diseqs, mk_or srk disjs*)
+    | `Quantify (qtyp, name, typ, (eqs, diseqs, phi)) ->
+      let q_fun, matrix = 
+        if qtyp = `Forall then 
+          mk_forall, BatMap.find_default (QQMatrix.zero) (Linear.dim_of_fv 0) diseqs 
+        else mk_exists, BatMap.find_default (QQMatrix.zero) (Linear.dim_of_fv 0) eqs 
+      in
+      if QQMatrix.nb_rows = 0 then q_fun srk ~name typ phi
+      else
+        let _, vt = QQMatrix.min_row matrix in
+        let subst_term = Linear.of_linterm srk vt in
+        let subst_term' = 
+          substitute srk (fun (ind, typ) -> mk_var srk (ind - 1) typ) subst_term
+        in
+      let sub_pairs ind0 lst = 
+        List.map (fun ((f1, t1, f2, t2)) -> 
+          DecMap.dec 1 f1, subst ind0 t1, DecMap.dec 1 f2, subst ind0 t2) 
+        lst
+      in
+      begin match subst_term with
+      | None ->
+        let filter_pairs lst = 
+          List.filter (fun (f1, _, f2, _) -> 
+            (not (DecMap.mem 0 f1)) &&
+            (not (DecMap.mem 0 f2)))
+          lst
+        in
+        let eqs = sub_pairs fls (filter_pairs eqs) in
+        let diseqs = sub_pairs fls (filter_pairs diseqs) in
+        eqs, diseqs, q_fun srk ~name typ phi
+      | Some t ->
+        let t' _ = subst fls t in
+        let eqs = sub_pairs t' eqs in
+        let diseqs = sub_pairs t' diseqs in
+        eqs, diseqs, subst t' phi
+      end
+    | `Not (eqs, diseqs, phi) -> (diseqs, eqs, mk_not srk phi)
+    | `Proposition (`Var ind) -> ([], [], mk_var srk ind `TyBool) 
+    | `Proposition (`App (f, args)) -> ([], [], mk_app srk f args)
+    | `Ite ((_, _, cond), (eq2, diseq2, bthen), (eq3, diseq3, belse)) -> 
+      intersect [eq2; eq3], diseq2 @ diseq3, mk_ite srk cond bthen belse
+    | _ -> assert false
+  in
+  let _, _, phi = Formula.eval srk alg phi in
+  phi
+
