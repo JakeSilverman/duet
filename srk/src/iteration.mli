@@ -63,6 +63,10 @@ module GuardedTranslation : PreDomain
    term over y. *)
 module NonlinearRecurrenceInequation : PreDomainWedge
 
+(* Lifts a predomain over LIA formula to one over quantified lia formula
+ * by performing quantifier elimination prior to abstraction *)
+module QLIALift (Iter : PreDomain) : PreDomain
+
 (** Improve iteration operator using split invariants *)
 module Split(Iter : PreDomain) : PreDomain
 
