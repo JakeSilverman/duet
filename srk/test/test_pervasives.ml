@@ -19,6 +19,9 @@ let q : 'a term = Ctx.mk_const qsym
 let r : 'a term = Ctx.mk_const rsym
 let s : 'a term = Ctx.mk_const ssym
 
+let bsym = Ctx.mk_symbol ~name:"b" `TyBool
+let b : 'a formula = Ctx.mk_const bsym
+
 let vsym = Ctx.mk_symbol ~name:"v" `TyInt
 let wsym = Ctx.mk_symbol ~name:"w" `TyInt
 let xsym = Ctx.mk_symbol ~name:"x" `TyInt

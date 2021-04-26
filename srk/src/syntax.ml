@@ -927,6 +927,21 @@ module Formula = struct
     | Node (Ite, [cond; bthen; belse], `TyBool) -> `Ite (cond, bthen, belse)
     | _ -> invalid_arg "destruct: not a formula"
 
+  let construct _srk open_formula = match open_formula with
+    | `Tru -> mk_true _srk
+    | `Fls -> mk_false _srk
+    | `And conjuncts -> mk_and _srk conjuncts
+    | `Or disjuncts -> mk_or _srk disjuncts
+    | `Not phi -> mk_not _srk phi
+    | `Quantify (`Exists, name, typ, phi) -> mk_exists _srk ~name typ phi
+    | `Quantify (`Forall, name, typ, phi) -> mk_forall _srk ~name typ phi
+    | `Atom (`Eq, s, t) -> mk_eq _srk s t
+    | `Atom (`Leq, s, t) -> mk_leq _srk s t
+    | `Atom (`Lt, s, t) -> mk_lt _srk s t
+    | `Proposition (`Var v) -> mk_const _srk v
+    | `Proposition (`App (f, args)) -> mk_app _srk f args
+    | `Ite (cond, bthen, belse) -> mk_ite _srk cond bthen belse
+
   let rec eval srk alg phi = match destruct srk phi with
     | `Tru -> alg `Tru
     | `Fls -> alg `Fls
