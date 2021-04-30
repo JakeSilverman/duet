@@ -49,7 +49,6 @@ let typ_symbol_fo srk sym =
   | `TyReal -> `TyReal
   | `TyBool -> `TyBool
   | `TyArr -> `TyArr
-  (* TODO: arrays *)
   | _ -> assert false
 
 module Fp = struct
