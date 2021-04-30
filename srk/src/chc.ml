@@ -26,7 +26,7 @@ let typ_symbol_fo srk sym =
   | `TyInt -> `TyInt
   | `TyReal -> `TyReal
   | `TyBool -> `TyBool
-  (* TODO: arrays *)
+  | `TyArr -> `TyArr 
   | _ -> assert false
 
 let mk_rel_atom srk fp rel syms =
