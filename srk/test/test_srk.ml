@@ -28,8 +28,7 @@ let suite = "Main" >::: [
     Test_transition.suite;
     Test_WeightedGraph.suite;
     Test_chc.suite;
-    Test_numberField.suite;
-    Test_rational.suite
+    Test_pmfa.suite
 ]
 
 let _ =
