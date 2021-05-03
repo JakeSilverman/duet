@@ -394,8 +394,9 @@ let propose_offset_candidates_seahorn srk fp classes =
             BatList.hd 
               (BatList.rev ((BatList.filteri_map (fun ind var -> 
                    if BatString.starts_with (show_symbol srk var) 
-                       "main@%_" && ind < chcvarclass.param then
-                     Some (var, ind)
+                       "main@%_" && ind <= chcvarclass.param 
+                   then(Log.errorf "name is %s\n" (show_symbol srk var);
+                     Some (var, ind))
                    else None)
                    params)))
           in
