@@ -57,6 +57,8 @@ module Fp : sig
    * integer parameters. Where [map, fp' = unbooleanize srk fp], the relation
    * [r] in [fp] is mapped to the relation symbol [map r] in [fp'].*)
   val unbooleanize : 'a context -> 'a fp -> (relation -> relation) * 'a fp
+  val eliminate_store : 'a context -> 'a fp -> unit 
+  val eliminate_ite : 'a context -> 'a fp -> unit
   (** [is_linear rules] returns true if rules defines linear system of chcs *)
   val is_linear : (rel_atom list * 'a formula * rel_atom) list -> bool
   (** [check srk fp pd] returns unknown if a query relation can

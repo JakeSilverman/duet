@@ -483,6 +483,23 @@ module Fp = struct
       fp.queries;
     let rel_fun rel = BatHashtbl.find rel_map rel in
     rel_fun, fp'
+
+
+let eliminate_store srk fp =
+    let rules' =
+      List.map (fun (hypo, constr, conc) ->
+          hypo, eliminate_stores srk constr, conc)
+        fp.rules
+    in
+    fp.rules<-rules'
+
+  let eliminate_ite srk fp =
+    let rules' =
+      List.map (fun (hypo, constr, conc) ->
+          hypo, eliminate_ite srk constr, conc)
+        fp.rules
+    in
+    fp.rules<-rules'
 end
 
 module ChcSrkZ3 = struct
@@ -493,7 +510,7 @@ module ChcSrkZ3 = struct
     | REAL_SORT -> `TyReal
     | INT_SORT -> `TyInt
     | BOOL_SORT -> `TyBool
-    (*| ARRAY_SORT -> `TyArr*)
+    | ARRAY_SORT -> `TyArr
     |_ -> failwith "function types not currently supported in rel param"
 
   let rel_atom_of_z3 srk fp ind_to_sym rsym_to_int z3pred =

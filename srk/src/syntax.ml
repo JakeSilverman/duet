@@ -1204,6 +1204,7 @@ module Formula = struct
     | Node (Var (v, `TyBool), [], _) -> `Proposition (`Var v)
     | Node (App f, args, `TyBool) -> `Proposition (`App (f, args))
     | Node (Ite, [cond; bthen; belse], `TyBool) -> `Ite (cond, bthen, belse)
+    | Node (App _, _, `TyReal) -> invalid_arg "jek"
     | _ -> invalid_arg "destruct: not a formula"
 
   let construct _srk open_formula = match open_formula with
@@ -1218,7 +1219,7 @@ module Formula = struct
     | `Atom (`Arith (`Leq, s, t)) -> mk_leq _srk s t
     | `Atom (`Arith (`Lt, s, t)) -> mk_lt _srk s t
     | `Atom (`ArrEq (s, t)) -> mk_arr_eq _srk s t
-    | `Proposition (`Var v) -> mk_const _srk v
+    | `Proposition (`Var v) -> mk_var _srk v `TyBool
     | `Proposition (`App (f, args)) -> mk_app _srk f args
     | `Ite (cond, bthen, belse) -> mk_ite _srk cond bthen belse
 
@@ -1447,6 +1448,7 @@ let node_typ symbols label children =
     begin match children with
       | [a; i] -> begin match a.obj, i.obj with
           | Node (_, _, `TyArr), Node(_, _, `TyInt) -> `TyInt
+          | Node (_, _, `TyArr), Node(_, _, `TyReal) -> `TyInt
           | _ -> invalid_arg "invalid array select"
         end
       |  _ -> assert false
