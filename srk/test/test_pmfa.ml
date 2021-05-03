@@ -1,7 +1,6 @@
 open Srk
 open OUnit
 open Chc
-open Syntax
 open Test_pervasives
 open Pmfa
 
@@ -16,7 +15,7 @@ open Pmfa
   Log.errorf "Class a3 isi%n\n" (BatUref.uget (BatHashtbl.find classes a3sym));
   assert false
 *)
-
+(*
 let countupsuplin () =
   let fp = Fp.create () in
   let r1 = mk_relation fp ~name:"R1" [`TyInt; `TyArr] in
@@ -65,6 +64,32 @@ let countupsuplin () =
   Log.errorf "HERE";
   apply_offset_candidates srk fp classes class_map;
   Log.errorf "Final fp is\n %a" (Chc.Fp.pp srk) fp;
+  assert false*)
+
+let test_init () =
+  let fp = Chc.Fp.create () in
+  let fp = Chc.ChcSrkZ3.parse_file srk fp "/Users/jakesilverman/Documents/arraycopy2.smt2" in
+  Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
+  let _, fp = Fp.unbooleanize srk fp in
+  Fp.eliminate_store srk fp;
+  Fp.eliminate_ite srk fp;
+  let fp = Fp.normalize srk fp in
+  let classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
+  BatHashtbl.iter (fun chcvar1 chcvar2 ->
+      Log.errorf "\nchc var (%a, %n) is mapped to (%a, %n)\n" (Relation.pp fp) chcvar1.rel
+        chcvar1.param (Relation.pp fp) chcvar2.rel chcvar2.param)
+    classes;
+  let cands = propose_offset_candidates_seahorn srk fp classes in
+  apply_offset_candidates srk fp classes cands;
+  Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
+
+  assert false
+
+let test_init2 () =
+  let phi = Syntax.mk_not srk (Syntax.mk_var srk 0 `TyBool) in
+  let phi = match Syntax.Formula.destruct srk phi with | open_form -> 
+    Syntax.Formula.construct srk open_form in
+  Log.errorf "just var is %a" (Syntax.Formula.pp srk) phi;
   assert false
 
 
@@ -73,5 +98,6 @@ let suite = "Pmfa" >:::
   [
 
     (*"test_offset1" >:: test_offset1;*)
-    "contupsuplin" >:: countupsuplin;
+    (*"contupsuplin" >:: countupsuplin;*)
+    "test_init" >:: test_init;
   ]

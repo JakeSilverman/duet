@@ -10,8 +10,8 @@ let skolemize srk phi =
     | `Quantify (`Exists, name, typ, phi) ->
       let new_subst_var = mk_symbol srk ~name (typ :> typ) in
       new_vars := Symbol.Set.add new_subst_var (!new_vars);
-      subst_existentials ((mk_const srk new_subst_var) :: subst_lst) phi
-    | `And conjuncts -> 
+      subst_existentials ((new_subst_var) :: subst_lst) phi
+    | `And conjuncts ->
       mk_and srk (List.map (subst_existentials subst_lst) conjuncts)
     | `Or disjuncts ->
       mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
@@ -19,10 +19,11 @@ let skolemize srk phi =
       (* TODO: make substitute more efficient *)
       substitute
         srk
-        (fun (i, _) -> List.nth subst_lst i)
+        (fun (i, _) -> mk_const srk (List.nth subst_lst i))
         (Formula.construct srk open_form)
   in
-  subst_existentials [] phi, !new_vars
+  let phi' = subst_existentials [] phi in
+  phi', !new_vars
 
 (* Assumes formula has already been skolemized *)
 let offset_partitioning srk phi =
@@ -92,7 +93,7 @@ let offset_partitioning srk phi =
     | `Not symopt -> symopt
     | `Ite (_, _, _) -> assert false
     | `Quantify _ -> assert false
-    | `Proposition _ -> assert false
+    | `Proposition _ -> None
   in
   let rec compute_equiv_classes phi : unit =
     match Formula.destruct srk phi with
@@ -107,8 +108,8 @@ let offset_partitioning srk phi =
         merge_arr_opts (Some (extract_arr_sym a)) (Some (extract_arr_sym b)) 
       in
       ()
-    | `Tru | `Fls | `Atom (`Arith (_, _, _)) -> ()
-    | `Proposition _ | `Quantify (`Exists, _, _, _) | `Ite _ -> assert false 
+    | `Tru | `Fls | `Atom (`Arith (_, _, _)) | `Proposition _ -> ()
+    | `Quantify (`Exists, _, _, _) | `Ite _ -> assert false 
   in
   compute_equiv_classes phi;
   class_map
@@ -164,7 +165,9 @@ let pmfa_chc_offset_partitioning srk fp =
             (params_of_atom atom))
         (conc :: hypos))
     fp.rules;
-  class_map
+  let classes = BatHashtbl.map (fun _ uref -> BatUref.uget uref) class_map in
+  classes
+
 
 let verify_offset_candidates srk fp candidates =
   let atom_has_cand atom = Hashtbl.mem candidates (rel_of_atom atom) in
@@ -198,35 +201,39 @@ let apply_offset_formula srk cell_offsets (free_var_cell : (symbol, chcvar) Hash
   (* We need to assign the existentially quant array vars to a class *)
   let phi = eliminate_stores srk phi in
   let skolemized, consts = skolemize srk phi in
+  let arr_consts = Symbol.Set.filter (fun sym -> typ_symbol srk sym = `TyArr) consts in
   let constr_partitioning = offset_partitioning srk skolemized in
+  let constr_partitioning = BatHashtbl.map (fun _ uref -> BatUref.uget uref) constr_partitioning in
+ 
   let cp_fv_reps = BatHashtbl.create 0 in
-  Log.errorf "phi is %a" (Formula.pp srk) phi;
-  BatEnum.iter (fun fv ->
-      Log.errorf "error3 %s" (show_symbol srk fv);
+  let arrs = 
+    Symbol.Set.filter (fun sym -> (typ_symbol srk sym) = `TyArr)  (symbols phi)
+  in
+
+  Symbol.Set.iter (fun fv ->
       if BatHashtbl.mem constr_partitioning fv then (
-      let cp_cell = BatHashtbl.find constr_partitioning fv in
-      Log.errorf "error3NO";
-      if BatHashtbl.mem cp_fv_reps cp_cell then ()
-      else BatHashtbl.add cp_fv_reps cp_cell fv)
+        let cp_cell = BatHashtbl.find constr_partitioning fv in
+        if BatHashtbl.mem cp_fv_reps cp_cell then ()
+        else BatHashtbl.add cp_fv_reps cp_cell fv)
       else ())
-    (BatHashtbl.keys free_var_cell);
+    arrs;
   let consts_cell = BatHashtbl.create 0 in
   Symbol.Set.iter (fun const ->
-      Log.errorf "error4";
-      let cp_cell = BatHashtbl.find constr_partitioning const in 
+      let cp_cell = BatHashtbl.find constr_partitioning const in
       if BatHashtbl.mem cp_fv_reps cp_cell 
-      then BatHashtbl.add 
+      then (
+        BatHashtbl.add 
           consts_cell
           const
-          (Some (Hashtbl.find free_var_cell (Hashtbl.find cp_fv_reps cp_cell)))
-      else BatHashtbl.add consts_cell const None)
-    consts;
+          (Some (Hashtbl.find free_var_cell (Hashtbl.find cp_fv_reps cp_cell))))
+      else (BatHashtbl.add consts_cell const None))
+    arr_consts;
   let offset_cell var =
     if Hashtbl.mem free_var_cell var then
       Some (Hashtbl.find free_var_cell var)
     else Hashtbl.find consts_cell var
   in
-  let offset_val var = 
+  let offset_val var =
     match offset_cell var with
     | None -> None
     | Some cell -> Some (mk_const srk (Hashtbl.find cell_offsets cell))
@@ -236,7 +243,10 @@ let apply_offset_formula srk cell_offsets (free_var_cell : (symbol, chcvar) Hash
         match acc, opt with
         | v, None -> v
         | None, v -> v
-        | Some v1, Some v2 -> if v1 = v2 then acc else assert false)
+        | Some v1, Some v2 -> if v1 = v2 then acc 
+          else(
+            assert false)
+      )
       None
       lst
   in
@@ -273,8 +283,9 @@ let apply_offset_formula srk cell_offsets (free_var_cell : (symbol, chcvar) Hash
 let rec offset_formula cell phi =
     match Formula.destruct srk phi with
     | `Quantify (`Exists, _, _, _) 
-    | `Proposition _ 
     | `Ite _ -> assert false
+    | `Proposition (`App (sym, [])) -> mk_const srk sym
+    | `Proposition _ -> assert false
     | `Tru -> mk_true srk
     | `Fls -> mk_false srk
     | `Not phi -> mk_not srk (offset_formula cell phi)
@@ -288,9 +299,7 @@ let rec offset_formula cell phi =
     | `Quantify (`Forall, name, _, phi) ->
       let cell_opt = Formula.eval srk deduce_cell_formula phi in
       let cell = match cell_opt with | None -> None | Some v -> v in
-      Log.errorf "error2";
       let cell_val = match cell with | None -> None | Some cell -> Some (mk_const srk (Hashtbl.find cell_offsets cell)) in
-      Log.errorf "error2NO";
       mk_forall srk ~name `TyInt (offset_formula cell_val phi)
   and offset_arith equiv_class term =
     let map = offset_arith equiv_class in
@@ -337,17 +346,17 @@ let apply_offset_candidates srk fp (chcvar_to_class :  (chcvar, chcvar) Hashtbl.
             BatList.iteri (fun i param ->
                 if (typ_symbol srk param) = `TyArr 
                 then
-                  (Log.errorf "error1";
+                  (
                   let param_class = 
                     Hashtbl.find chcvar_to_class {rel = rel_of_atom atom; param=i} 
                   in
-                  Log.errorf "error1NO";
                   Hashtbl.add var_to_class param param_class)
                 else ())
               (params_of_atom atom);
             BatHashtbl.iter (fun class_cell class_cands ->
                 if Hashtbl.mem class_cands (rel_of_atom atom) then
-                  Hashtbl.add class_to_candidate class_cell (Hashtbl.find class_cands (rel_of_atom atom))
+                  (
+                  Hashtbl.add class_to_candidate class_cell (List.nth (params_of_atom atom) (Hashtbl.find class_cands (rel_of_atom atom))))
                 else ())
               class_candidates)
           (conc :: hypos);
@@ -356,3 +365,43 @@ let apply_offset_candidates srk fp (chcvar_to_class :  (chcvar, chcvar) Hashtbl.
       fp.rules
   in
   fp.rules <- rules'
+
+let propose_offset_candidates_seahorn srk fp classes =
+  let names_selected = Hashtbl.create 97 in
+  let candidates = Hashtbl.create 97 in
+  let param_reps = Hashtbl.create 97 in
+  List.iter (fun (hypos, _, conc) ->
+      List.iter (fun atom ->
+          if Hashtbl.mem param_reps (rel_of_atom atom) then ()
+          else Hashtbl.add param_reps (rel_of_atom atom) (params_of_atom atom))
+        (conc :: hypos))
+    fp.rules;
+  BatHashtbl.iter (fun chcvarin chcvarclass ->
+      if not (Hashtbl.mem candidates chcvarclass)
+      then Hashtbl.add candidates chcvarclass (BatHashtbl.create 97)
+      else ();
+      if Hashtbl.mem (Hashtbl.find candidates chcvarclass) chcvarin.rel
+      then ()
+      else (
+        let params = Hashtbl.find param_reps chcvarin.rel in
+        if Hashtbl.mem names_selected chcvarclass then (
+          let name = Hashtbl.find names_selected chcvarclass in
+          let ind, _ = BatList.findi (fun _ var -> (show_symbol srk var) = name) params in
+          Hashtbl.add (Hashtbl.find candidates chcvarclass) chcvarin.rel ind
+        )
+        else (
+          let var, ind = 
+            BatList.hd 
+              (BatList.rev ((BatList.filteri_map (fun ind var -> 
+                   if BatString.starts_with (show_symbol srk var) 
+                       "main@%_" && ind < chcvarclass.param then
+                     Some (var, ind)
+                   else None)
+                   params)))
+          in
+          Hashtbl.add names_selected chcvarclass (show_symbol srk var);
+          Hashtbl.add (Hashtbl.find candidates chcvarclass) chcvarin.rel ind
+        )
+      ))
+  classes;
+  candidates

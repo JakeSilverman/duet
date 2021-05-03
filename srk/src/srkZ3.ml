@@ -334,6 +334,7 @@ let of_z3 context sym_of_decl expr =
                           mk_and context [mk_not context phi;
                                           mk_not context psi]]
            :> 'a gexpr)
+        | `ArrTerm a, `ArrTerm b -> (mk_arr_eq context a b :> 'a gexpr)
         | _, _ -> invalid_arg "of_z3: equal"
       end
     | `Atom (`Leq, s, t) -> (mk_leq context (arith_term s) (arith_term t) :> 'a gexpr)
