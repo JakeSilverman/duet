@@ -27,92 +27,100 @@ let skolemize srk phi =
 
 (* Assumes formula has already been skolemized *)
 let offset_partitioning srk phi =
+  (* We start out by assigning each array sym in phi to its own equiv class. 
+   * We evaluate a formula bottom up and merge the equivalence of two arrays
+   * if they are related by an array equality or if they both read from the
+   * same universally quantified var.*)
+  Log.errorf "phi is %a\n" (Formula.pp srk) phi;
   let arrs = 
     Symbol.Set.filter (fun sym -> (typ_symbol srk sym) = `TyArr)  (symbols phi)
   in
+  (* A map from arr var syms to BatUref objects. Two arr var syms belong
+   * to the same cell if their BatUref holds the same value *)
   let class_map = BatHashtbl.create 97 in
   Symbol.Set.iter (fun sym ->
-      BatHashtbl.add class_map sym (BatUref.uref (int_of_symbol sym)))
+      BatHashtbl.add class_map sym (BatUref.uref sym))
     arrs;
-  let merge_arr_opts a b =
-    match a, b with
-    | None, v -> v
-    | v, None -> v
-    | Some sym1, Some sym2 ->
-      BatUref.unite 
-        (BatHashtbl.find class_map sym1) 
-        (BatHashtbl.find class_map sym2);
-      Some sym1
+  (* Merge cells merges unifies the input equivalence classes "cells"
+   * into a single cell and then returns a representative var sym for
+   * the merged cell *)
+  let merge_cells cells =
+    List.fold_left (fun acc_cell cell ->
+        match acc_cell, cell with
+        | None, v -> v
+        | v, None -> v
+        | Some sym1, Some sym2 ->
+          Log.errorf "MERGING %s with %s\n" (show_symbol srk sym1) (show_symbol srk sym2);
+          BatUref.unite 
+            (BatHashtbl.find class_map sym1) 
+            (BatHashtbl.find class_map sym2);
+          Some sym1)
+      None
+      cells
   in
-  (* This does not allow for arr_eq under univs *)
-  let rec extract_arr_sym term =
-    match ArrTerm.destruct srk term with
-    | `App (sym, lst) -> 
-      if lst = [] then sym else assert false
-    | `Var _ -> assert false
-    | `Ite _ -> assert false 
-    | `Store (term, _, _) -> extract_arr_sym term
-  in
-  let merge_arith_terms = function
+  (* The algebra acts over the universe (base : symbol list, cell : symbol option) 
+   * where "base" is the list of base arrays symbols (plural in case of ite)
+   * of this array term and "cell" is a representative of the cell of arrays that
+   * read from a (not bound within this term) univ quant var.*)
+  let rec arr_term_alg = function
+    | `App (sym, lst) -> if lst = [] then [Some sym], None 
+      else invalid_arg "offset_partitioning: Uninterp func not in pmfa"
+    | `Var _ -> invalid_arg "offset_partitioning: must skolemize first"
+    | `Ite (phi, (base1, cell1), (base2, cell2)) -> 
+      let cell_phi = Formula.eval srk formula_alg phi in
+      base1 @ base2, merge_cells [cell_phi; cell1; cell2]
+    | `Store ((base_arr, base_cell), i, v) -> 
+      let celli, _ = ArithTerm.eval srk arith_term_alg i in
+      let cellv, _ = ArithTerm.eval srk arith_term_alg v in
+      base_arr, merge_cells [base_cell; celli; cellv]
+  (* This algebra has return type (cell : symbol option, var0 : bool) where
+   * cell denotes the same thing as in arr_term_alg and var0 denotes whether a
+   * term is "var 0 `TyInt"*)
+  and arith_term_alg = function
     | `Select (arr, (_, var0)) ->
-      if var0 then 
-        Some (extract_arr_sym arr), false
-      else 
-        None, false
-    | `Var (i, _) -> 
-      if i = 0 then
-        None, true
-      else assert false
+      let base_arrs, cell = ArrTerm.eval srk arr_term_alg arr in
+      if var0 then merge_cells (cell :: base_arrs), false
+      else cell, false
+    | `Var (i, _) -> if i = 0 then None, true else assert false
     | `Add lst
     | `Mul lst ->
-      let symopt = 
-        List.fold_left 
-          (fun symoptacc (symopt, _) -> merge_arr_opts symoptacc symopt)
-          None
-          lst
-      in
-      symopt, false
-    | `Binop (_, (symopt1, _), (symopt2, _)) ->
-      merge_arr_opts symopt1 symopt2, false
-    | `Unop (_, (symopt, _)) -> symopt, false
+      let cells = List.map (fun (cell, _) -> cell) lst in
+      merge_cells cells, false
+    | `Binop (_, (cell1, _), (cell2, _)) ->
+      merge_cells [cell1; cell2], false
+    | `Unop (_, (cell, _)) -> cell, false
     | `Real _ -> None, false
     | `App _ -> None, false
-    | `Ite _ -> assert false
-  in
-  let merge_formula = function
+    | `Ite (phi, (cell1, _), (cell2, _)) ->
+      let cell_phi = Formula.eval srk formula_alg phi in
+      merge_cells [cell_phi; cell1; cell2], false
+  and formula_alg = function
     | `Tru
-    | `Fls -> None
-    | `Atom (`Arith (_, x, y)) ->
-      merge_arr_opts 
-        (fst (ArithTerm.eval srk merge_arith_terms x)) 
-        (fst (ArithTerm.eval srk merge_arith_terms y))
-    | `Atom(`ArrEq (_, _)) -> assert false (* should pmfa support this? *)
-    | `And symopts
-    | `Or symopts ->
-      List.fold_left merge_arr_opts None symopts
-    | `Not symopt -> symopt
-    | `Ite (_, _, _) -> assert false
-    | `Quantify _ -> assert false
+    | `Fls 
+    | `Quantify(`Forall, _, _, _) 
     | `Proposition _ -> None
+    | `Atom (`Arith (_, x, y)) ->
+      let cellx, _ = ArithTerm.eval srk arith_term_alg x in
+      let celly, _ = ArithTerm.eval srk arith_term_alg y in
+      merge_cells [cellx; celly]
+    | `Atom(`ArrEq (a, b)) ->
+       let base_arrs1, cell1 = ArrTerm.eval srk arr_term_alg a in
+       let base_arrs2, cell2= ArrTerm.eval srk arr_term_alg b in
+       (* The univ quant var may not appear in ArrEq atoms *)
+       if Option.is_some cell1 || Option.is_some cell2
+       then invalid_arg "offset_partitioning: univ quant in ArrEq"
+       else (
+         let _ = merge_cells (base_arrs1 @ base_arrs2) in
+         None)
+    | `And cells
+    | `Or cells -> merge_cells cells
+    | `Not cell -> cell
+    | `Ite (cell1, cell2, cell3) -> merge_cells [cell1; cell2; cell3]
+    | `Quantify (`Exists, _, _, _) -> assert false 
   in
-  let rec compute_equiv_classes phi : unit =
-    match Formula.destruct srk phi with
-    | `Quantify (`Forall, _, _, phi) -> 
-      let _ = Formula.eval srk merge_formula phi in
-      ()
-    | `And juncts 
-    | `Or juncts -> List.iter compute_equiv_classes juncts
-    | `Not a -> compute_equiv_classes a
-    | `Atom (`ArrEq (a, b)) -> 
-      let _ = 
-        merge_arr_opts (Some (extract_arr_sym a)) (Some (extract_arr_sym b)) 
-      in
-      ()
-    | `Tru | `Fls | `Atom (`Arith (_, _, _)) | `Proposition _ -> ()
-    | `Quantify (`Exists, _, _, _) | `Ite _ -> assert false 
-  in
-  compute_equiv_classes phi;
+  let _ = Formula.eval srk formula_alg phi in
   class_map
+
 
 type chcvar = { rel : Relation.t; param : int} 
 [@@deriving ord]
