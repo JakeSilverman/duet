@@ -31,7 +31,6 @@ let offset_partitioning srk phi =
    * We evaluate a formula bottom up and merge the equivalence of two arrays
    * if they are related by an array equality or if they both read from the
    * same universally quantified var.*)
-  Log.errorf "phi is %a\n" (Formula.pp srk) phi;
   let arrs = 
     Symbol.Set.filter (fun sym -> (typ_symbol srk sym) = `TyArr)  (symbols phi)
   in
@@ -50,7 +49,6 @@ let offset_partitioning srk phi =
         | None, v -> v
         | v, None -> v
         | Some sym1, Some sym2 ->
-          Log.errorf "MERGING %s with %s\n" (show_symbol srk sym1) (show_symbol srk sym2);
           BatUref.unite 
             (BatHashtbl.find class_map sym1) 
             (BatHashtbl.find class_map sym2);
@@ -176,6 +174,62 @@ let pmfa_chc_offset_partitioning srk fp =
   let classes = BatHashtbl.map (fun _ uref -> BatUref.uget uref) class_map in
   classes
 
+(*
+let pmfa_chc_offset_partitioning srk fp =
+  let rels = Fp.get_active_relations fp in
+  let chc_arr_vars = 
+    Relation.Set.fold (fun rel chcvarset ->
+        BatList.fold_lefti (fun chcvarset ind typ ->
+            if typ = `TyArr then CHCVarSet.add {rel;param=ind} chcvarset
+            else chcvarset)
+          chcvarset
+          (type_of fp rel))
+      rels
+      CHCVarSet.empty
+  in
+  let class_map = BatHashtbl.create 97 in
+  CHCVarSet.iter (fun chcvar ->
+      BatHashtbl.add class_map chcvar (BatUref.uref chcvar))
+    chc_arr_vars;
+  let merge a b =
+    BatUref.unite 
+      (BatHashtbl.find class_map a) 
+      (BatHashtbl.find class_map b)
+  in
+  List.iteri (fun ind (hypos, constr, conc) ->
+      let var_to_chcvar = Hashtbl.create 97 in
+      List.iter (fun atom ->
+          List.iteri (fun ind sym ->
+              if (typ_symbol srk sym) = `TyArr
+              then Hashtbl.add var_to_chcvar {rel=(rel_of_atom atom);param=ind}
+              else ())
+            (params_of_atom atom))
+        (conc :: hypos);
+
+
+
+      let constr_partitioning = offset_partitioning srk constr in
+      let cell_reps = BatHashtbl.create 97 in
+      List.iter (fun atom ->
+          List.iteri (fun ind sym ->
+              if (typ_symbol srk sym) = `TyArr &&
+                 BatHashtbl.mem constr_partitioning sym 
+              then (
+                let chcvar = {rel=(rel_of_atom atom);param=ind} in
+                let cell = 
+                  BatUref.uget (BatHashtbl.find constr_partitioning sym) 
+                in 
+                if BatHashtbl.mem cell_reps cell then
+                  merge (BatHashtbl.find cell_reps cell) chcvar
+                else
+                  BatHashtbl.add cell_reps cell chcvar)
+              else ())
+            (params_of_atom atom))
+        (conc :: hypos))
+    fp.rules;
+  let classes = BatHashtbl.map (fun _ uref -> BatUref.uget uref) class_map in
+  classes
+*)
 
 let verify_offset_candidates srk fp candidates =
   let atom_has_cand atom = Hashtbl.mem candidates (rel_of_atom atom) in
@@ -204,176 +258,126 @@ let verify_offset_candidates srk fp candidates =
         | _ -> false))
     true
     fp.rules
+(* In the function apply_offset_formula we label each expression with an 
+ * associated element of type offset. The offset is the value by which we
+ * value by which we must increment the free var "0" where it does not occur
+ * in an select term. DNA, does not apply, means that the expression cannot
+ * contain the free var "0". Cell is the case where the increment must be by 
+ * by a fixed term and unrestricted is the case where the offset has not yet
+ * been locked to a specific term. *)
+type cell = Symbol of symbol | Zero
+type offset = DNA | Cell of cell | Unrestricted
 
-let apply_offset_formula srk cell_offsets (free_var_cell : (symbol, chcvar) Hashtbl.t) phi =
-  (* We need to assign the existentially quant array vars to a class *)
-  let phi = eliminate_stores srk phi in
-  let skolemized, consts = skolemize srk phi in
-  let arr_consts = Symbol.Set.filter (fun sym -> typ_symbol srk sym = `TyArr) consts in
-  let constr_partitioning = offset_partitioning srk skolemized in
-  let constr_partitioning = BatHashtbl.map (fun _ uref -> BatUref.uget uref) constr_partitioning in
- 
-  let cp_fv_reps = BatHashtbl.create 0 in
-  let arrs = 
-    Symbol.Set.filter (fun sym -> (typ_symbol srk sym) = `TyArr)  (symbols phi)
+let apply_offset_formula srk arr_var_offsets phi =
+  let merge_cells cells =
+    List.fold_left (fun acc cell ->
+        match acc, cell with
+        | v, Unrestricted -> v
+        | Unrestricted, v -> v
+        | Cell c1, Cell c2 -> if c1 = c2 then Cell c1 else assert false
+        | DNA, DNA -> DNA
+        | _ -> assert false)
+      Unrestricted
+      cells
   in
-
-  Symbol.Set.iter (fun fv ->
-      if BatHashtbl.mem constr_partitioning fv then (
-        let cp_cell = BatHashtbl.find constr_partitioning fv in
-        if BatHashtbl.mem cp_fv_reps cp_cell then ()
-        else BatHashtbl.add cp_fv_reps cp_cell fv)
-      else ())
-    arrs;
-  let consts_cell = BatHashtbl.create 0 in
-  Symbol.Set.iter (fun const ->
-      let cp_cell = BatHashtbl.find constr_partitioning const in
-      if BatHashtbl.mem cp_fv_reps cp_cell 
-      then (
-        BatHashtbl.add 
-          consts_cell
-          const
-          (Some (Hashtbl.find free_var_cell (Hashtbl.find cp_fv_reps cp_cell))))
-      else (BatHashtbl.add consts_cell const None))
-    arr_consts;
-  let offset_cell var =
-    if Hashtbl.mem free_var_cell var then
-      Some (Hashtbl.find free_var_cell var)
-    else Hashtbl.find consts_cell var
-  in
-  let offset_val var =
-    match offset_cell var with
-    | None -> None
-    | Some cell -> Some (mk_const srk (Hashtbl.find cell_offsets cell))
-  in
-  let opt_merge lst : 'a option =
-    List.fold_left (fun acc opt ->
-        match acc, opt with
-        | v, None -> v
-        | None, v -> v
-        | Some v1, Some v2 -> if v1 = v2 then acc 
-          else(
-            assert false)
-      )
-      None
-      lst
-  in
-  let rec deduce_cell_formula = function
-    | `Tru
-    | `Fls -> None
-    | `Not cell -> cell
-    | `And cells
-    | `Or cells -> opt_merge cells
-    | `Atom (`Arith (_, s, t)) ->
-      let cell term = fst (ArithTerm.eval srk deduce_cell_arith term) in
-      opt_merge [cell s; cell t]
-    | _ -> assert false
-  and deduce_cell_arith = function
-    | `Real _
-    | `App _ -> None, false
-    | `Var _ -> None, true
-    | `Add cells_bools
-    | `Mul cells_bools -> 
-      let cells = List.map fst cells_bools in
-      opt_merge cells, false
-    | `Binop (_, (cell1, _), (cell2, _)) -> opt_merge [cell1; cell2], false
-    | `Unop (_, (cell, _)) -> cell, false
-    | `Select (a, (_, var0)) ->
-      if var0 then
-        deduce_cell_arr a, false
-      else None, false
-    | `Ite _ -> assert false
-  and deduce_cell_arr term =
-    match ArrTerm.destruct srk term with
-    | `App (sym, []) -> Some (offset_cell sym)
-    | _ -> assert false
-  in
-let rec offset_formula cell phi =
-    match Formula.destruct srk phi with
-    | `Quantify (`Exists, _, _, _) 
-    | `Ite _ -> assert false
-    | `Proposition (`App (sym, [])) -> mk_const srk sym
-    | `Proposition _ -> assert false
-    | `Tru -> mk_true srk
-    | `Fls -> mk_false srk
-    | `Not phi -> mk_not srk (offset_formula cell phi)
-    | `And conjuncts -> 
-      mk_and srk (List.map (offset_formula cell) conjuncts)
-    | `Or disjuncts ->
-      mk_or srk (List.map (offset_formula cell) disjuncts)
-    | `Atom (`Arith (_, a, b)) -> 
-      (* TODO: mk_compare *)mk_eq srk (offset_arith cell a) (offset_arith cell b)
-    | `Atom (`ArrEq _) -> assert false
-    | `Quantify (`Forall, name, _, phi) ->
-      let cell_opt = Formula.eval srk deduce_cell_formula phi in
-      let cell = match cell_opt with | None -> None | Some v -> v in
-      let cell_val = match cell with | None -> None | Some cell -> Some (mk_const srk (Hashtbl.find cell_offsets cell)) in
-      mk_forall srk ~name `TyInt (offset_formula cell_val phi)
-  and offset_arith equiv_class term =
-    let map = offset_arith equiv_class in
-    match ArithTerm.destruct srk term with
-    | `Real _ -> term
-    | `Var (i, `TyInt) ->
-      if i = 0 then match equiv_class with
-        | None -> term
-        | Some v -> mk_add srk [term; v]
+  let offset = mk_symbol ~name:"offset" srk `TyInt in
+  let rec apply_offset_formula = function
+    | `Tru -> mk_true srk, Unrestricted
+    | `Fls -> mk_false srk, Unrestricted
+    | `Not (phi, cell) -> mk_not srk phi, cell
+    | `And objs -> 
+      let phis, cells = List.split objs in
+      mk_and srk phis, merge_cells cells
+    | `Or objs ->
+      let phis, cells = List.split objs in
+      mk_or srk phis, merge_cells cells 
+    | `Atom (`Arith (`Eq, s, t)) ->
+      let (s, (cells, _)) = ArithTerm.eval srk apply_offset_arith s in
+      let (t, (cellt, _)) = ArithTerm.eval srk apply_offset_arith t in
+      mk_eq srk s t, merge_cells [cells; cellt]
+    | `Atom(`ArrEq (a, b)) ->
+      let a, _, cella = ArrTerm.eval srk apply_offset_arr a in
+      let b, _, cellb = ArrTerm.eval srk apply_offset_arr b in
+      let cell = merge_cells [cella; cellb] in
+      if cell = Unrestricted || cell = DNA then
+        mk_arr_eq srk a b, DNA
       else assert false
-    | `Var _ -> assert false
-    | `App (_, []) -> term
-    | `App _ -> assert false
-    | `Add terms -> mk_add srk (List.map map terms)
-    | `Mul terms -> mk_mul srk (List.map map terms)
-    | `Binop (`Div, s, t) -> mk_div srk (map s) (map t)
-    | `Binop (`Mod, s, t) -> mk_mod srk (map s) (map t)
-    | `Unop (`Floor, s) -> mk_floor srk (map s)
-    | `Unop (`Neg, s) -> mk_neg srk (map s)
-    | `Select (a, i) ->
-      if i = mk_var srk 0 `TyInt 
-      then mk_select srk a i
-      else (
-        let arr_sym = offset_arr a in
-        match offset_val arr_sym with
-        | None -> mk_select srk a i
-        | Some v -> mk_select srk a (mk_sub srk i v))
-    | `Ite _ -> assert false
-  and offset_arr term =
-    match ArrTerm.destruct srk term with
-    | `App (sym, []) -> sym
+    | `Quantify (`Forall, name, `TyInt, (phi, cell)) ->
+      let subst offset_term = 
+        substitute_const 
+          srk 
+          (fun sym -> if sym = offset then offset_term else mk_const srk sym)
+          phi
+      in
+      begin match cell with
+        | DNA -> assert false
+        | Cell (Symbol sym) ->
+          mk_forall srk ~name `TyInt (subst (mk_const srk sym)), DNA
+        | Cell (Zero)  
+        | Unrestricted -> mk_forall srk ~name `TyInt (subst (mk_zero srk)), DNA
+      end
+    | `Proposition (`App (sym, [])) -> mk_const srk sym, Unrestricted
+    | `Ite ((phi1, cell1), (phi2, cell2), (phi3, cell3)) ->
+      mk_ite srk phi1 phi2 phi3, merge_cells [cell1; cell2; cell3]
+    | _ -> assert false
+  and apply_offset_arith = function
+    | `Real q -> mk_real srk q, (Unrestricted, false)
+    | `App (sym, []) -> mk_const srk sym, (Unrestricted, false)
+    | `Var (0, `TyInt)  -> 
+      mk_add srk [mk_var srk 0 `TyInt; mk_const srk offset], (Unrestricted, true)
+    | `Add objs -> 
+      let terms, cells_bools = BatList.split objs in
+      let cells, _ = BatList.split cells_bools in
+      mk_add srk terms, (merge_cells cells, false)
+    | `Mul objs ->
+      let terms, cells_bools = BatList.split objs in
+      let cells, _ = BatList.split cells_bools in
+      mk_mul srk terms, (merge_cells cells, false)
+    | `Binop (op, (term1, (cell1, _)), (term2, (cell2, _))) ->
+      let op = match op with `Div -> mk_div srk | `Mod -> mk_mod srk in
+      op term1 term2, (merge_cells [cell1; cell2], false)
+    | `Unop (op, (term, (cell, _))) -> 
+      let op = match op with `Floor -> mk_floor srk | `Neg -> mk_neg srk in
+      op term, (cell, false)
+    | `Select (a, (term, (cell, var0))) ->
+      let a, base_arr_cell, cella = ArrTerm.eval srk apply_offset_arr a in
+      if var0 then
+        mk_select srk a (mk_var srk 0 `TyInt), (merge_cells [base_arr_cell; cella], false)
+      else mk_select srk a (mk_add srk [term; mk_const srk offset]), (merge_cells [cell; cella], false) 
+    | `Ite (phi, (term1, (cell1, _)), (term2, (cell2, _))) ->
+      let phi, cell_phi = Formula.eval srk apply_offset_formula phi in
+      mk_ite srk phi term1 term2, (merge_cells [cell_phi; cell1; cell2], false)
+    | _ -> assert false 
+  and apply_offset_arr = function
+    | `App (sym, []) -> mk_const srk sym, Hashtbl.find arr_var_offsets sym, Unrestricted 
+    | `Ite (phi, (term1, base_cell1, cell1), (term2, base_cell2, cell2)) ->
+      let phi, cell_phi = Formula.eval srk apply_offset_formula phi in
+      mk_ite srk phi term1 term2, 
+      merge_cells [base_cell1; base_cell2],
+      merge_cells [cell1; cell2; cell_phi]
+    | `Store ((a, base_cell, cell), i, v) ->
+      let i, (celli, _) = ArithTerm.eval srk apply_offset_arith i in 
+      let v, (cellv, _) = ArithTerm.eval srk apply_offset_arith v in
+      mk_store srk a i v, base_cell, merge_cells [cell; celli; cellv]
     | _ -> assert false
   in
-  let skolemized_w_offsets = offset_formula None skolemized in
-  skolemized_w_offsets
+  fst (Formula.eval srk apply_offset_formula phi)
 
-(* Need class -> var; var -> class *)
-let apply_offset_candidates srk fp (chcvar_to_class :  (chcvar, chcvar) Hashtbl.t)  class_candidates =
+let apply_offset_candidates srk fp rule_cells class_candidates =
   let rules' = 
-    List.map (fun (hypos, constr, conc) ->
-        let var_to_class = Hashtbl.create 97 in
-        let class_to_candidate = Hashtbl.create 97 in
-        BatList.iter (fun atom ->
-            BatList.iteri (fun i param ->
-                if (typ_symbol srk param) = `TyArr 
-                then
-                  (
-                  let param_class = 
-                    Hashtbl.find chcvar_to_class {rel = rel_of_atom atom; param=i} 
-                  in
-                  Hashtbl.add var_to_class param param_class)
-                else ())
-              (params_of_atom atom);
-            BatHashtbl.iter (fun class_cell class_cands ->
-                if Hashtbl.mem class_cands (rel_of_atom atom) then
-                  (
-                  Hashtbl.add class_to_candidate class_cell (List.nth (params_of_atom atom) (Hashtbl.find class_cands (rel_of_atom atom))))
-                else ())
-              class_candidates)
-          (conc :: hypos);
-        let constr' = apply_offset_formula srk class_to_candidate var_to_class constr in
+    List.mapi (fun ind (hypos, constr, conc) ->
+        let var_to_cell = Hashtbl.create 97 in
+        BatHashtbl.iter (fun var cell -> 
+            match cell with
+            | None -> BatHashtbl.add var_to_cell var (Cell(Zero))
+            | Some cell -> BatHashtbl.add var_to_cell var (BatHashtbl.find class_candidates (ind, cell)))
+          (BatHashtbl.find rule_cells ind);
+        let constr' = apply_offset_formula srk var_to_cell constr in
         hypos, constr', conc)
       fp.rules
   in
   fp.rules <- rules'
-
+(*
 let propose_offset_candidates_seahorn srk fp classes =
   let names_selected = Hashtbl.create 97 in
   let candidates = Hashtbl.create 97 in
@@ -414,3 +418,6 @@ let propose_offset_candidates_seahorn srk fp classes =
       ))
   classes;
   candidates
+
+(*let offset_seahorn_fp srk fp =*)
+  *)

@@ -1,8 +1,18 @@
 open Srk
 open OUnit
 open Chc
+open Syntax
 open Test_pervasives
 open Pmfa
+
+let a4sym = Ctx.mk_symbol ~name:"a4" `TyArr
+let a5sym = Ctx.mk_symbol ~name:"a5" `TyArr
+let a6sym = Ctx.mk_symbol ~name:"a6" `TyArr
+let a4 = mk_const srk a4sym
+let a5 = mk_const srk a5sym
+let a6 = mk_const srk a6sym
+
+
 
 (*let test_offset1 =
   let phi =
@@ -66,6 +76,21 @@ let countupsuplin () =
   Log.errorf "Final fp is\n %a" (Chc.Fp.pp srk) fp;
   assert false*)
 
+let test_offset_partitioning () =
+    let phi =
+    let open Infix in
+    mk_ite srk (a1 == a2) (a3 == a4) ((a3.%[a1.%[x]]<-y) == a5) &&
+    (forall `TyInt (a5.%[var 0 `TyInt] = a6.%[x])) &&
+    (forall `TyInt (a1.%[var 0 `TyInt] = a6.%[var 0 `TyInt]))
+  in
+  let classes = Pmfa.offset_partitioning srk phi in
+  let equiv a b = BatUref.equal (Hashtbl.find classes a) (Hashtbl.find classes b) in
+  assert (equiv a1sym a2sym);
+  assert (equiv a1sym a6sym);
+  assert (equiv a3sym a4sym);
+  assert (equiv a3sym a5sym);
+  assert (not (equiv a1sym a3sym))
+
 let test_init () =
   let fp = Chc.Fp.create () in
   let fp = Chc.ChcSrkZ3.parse_file srk fp "/Users/jakesilverman/Documents/arraycopy2.smt2" in
@@ -99,5 +124,6 @@ let suite = "Pmfa" >:::
 
     (*"test_offset1" >:: test_offset1;*)
     (*"contupsuplin" >:: countupsuplin;*)
-    "test_init" >:: test_init;
+    "test_offset_partitioning" >:: test_offset_partitioning; 
+    (*"test_init" >:: test_init;*)
   ]
