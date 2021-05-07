@@ -588,3 +588,5 @@ module ContextTable : sig
   val mem : 'a t -> 'b context -> bool
   val clear : 'a t -> unit
 end
+
+val to_file : 'a context -> 'a formula -> string -> unit
