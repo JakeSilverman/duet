@@ -4,6 +4,10 @@ open Chc
 open Syntax
 open Test_pervasives
 open Pmfa
+open Iteration
+
+let ad = (module OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
+
 
 let a4sym = Ctx.mk_symbol ~name:"a4" `TyArr
 let a5sym = Ctx.mk_symbol ~name:"a5" `TyArr
@@ -105,17 +109,54 @@ let test_init () =
   let cands = propose_offset_candidates_seahorn srk fp classes in
   let rule_classes2 = derive_offset_for_each_rule fp cands in
   apply_offset_candidates srk fp rules_classes rule_classes2;
+  let _, fp = Chc.Fp.unbooleanize srk fp in
   Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
+  let phi = Fp.query_vc_condition srk fp ad in
+  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
+  let trs = [] in
+  let tf = TransitionFormula.make phi trs in
+  let _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
+  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
+  Log.errorf "lia is %a" (Formula.pp srk) lia;
+  let lia = Quantifier.miniscope srk lia in
+  let lia = Quantifier.eq_guided_qe srk lia in
+  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/rewritten_liaNEW.smt2";
+  let res = match Quantifier.simsat srk lia with
+    | `Unsat  -> `No
+    | `Unknown -> `Unknown
+    | `Sat -> `Unknown
+  in 
+  (if res = `No then Log.errorf "RES IS NO" else if
+     res = `Unknown then Log.errorf "RES IS UKNNOWN" else
+     Log.errorf "RES IS YES");
+  assert (res = `No)
 
-  assert false
 
+(*
 let test_init2 () =
   let phi = Syntax.mk_not srk (Syntax.mk_var srk 0 `TyBool) in
   let phi = match Syntax.Formula.destruct srk phi with | open_form -> 
     Syntax.Formula.construct srk open_form in
   Log.errorf "just var is %a" (Syntax.Formula.pp srk) phi;
-  assert false
-
+  let phi = Fp.query_vc_condition srk fp ad in
+  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
+  let tf = TransitionFormula.make phi trs in
+  let _, _, tf_proj = Arraycontent.projection srk tf in
+  let lia = TransitionFormula.formula (Arraycontent.pmfa_to_lia srk tf_proj) in
+  Log.errorf "lia is %a" (Formula.pp srk) lia;
+  let lia = Quantifier.miniscope srk lia in
+  let lia = Quantifier.eq_guided_qe srk lia in
+  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/rewritten_liaNEW.smt2";
+  let res = match Quantifier.simsat srk lia with
+    | `Unsat  -> `No
+    | `Unknown -> `Unknown
+    | `Sat -> `Unknown
+  in 
+  (if res = `No then Log.errorf "RES IS NO" else if
+     res = `Unknown then Log.errorf "RES IS UKNNOWN" else
+     Log.errorf "RES IS YES");
+  assert (res = `No)
+*)
 
 
 let suite = "Pmfa" >:::

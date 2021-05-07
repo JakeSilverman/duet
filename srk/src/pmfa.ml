@@ -527,8 +527,8 @@ module OldPmfa = struct
     mk_forall srk `TyInt body, !new_vars
 
 
-  let mfa_to_lia srk phi = assert false
-    (*let body = 
+  let mfa_to_lia srk phi =
+    let body = 
       match destruct srk phi with
       | `Quantify (`Forall, _, `TyInt, body) -> body
       | _ -> failwith "mfa formula needs to start with leading univ quant"
@@ -550,10 +550,10 @@ module OldPmfa = struct
           sym)
     in
     let nuqr_syms = ref Symbol.Set.empty in
-    let func_consist_reqs : ('a term, 'a term) Hashtbl.t = Hashtbl.create 100 in
+    let func_consist_reqs : ('a arr_term, 'a arith_term) Hashtbl.t = Hashtbl.create 100 in
     (* Maps the term a[i] to an integer symbol where i is not the universally
      * quantified var *)
-    let non_uq_read : 'c * 'd -> 'a term =
+    let non_uq_read : 'c * 'd -> 'a arith_term =
       Memo.memo (fun (arr, read) -> 
           Hashtbl.add func_consist_reqs arr read;
           let sym = mk_symbol srk `TyInt in
@@ -562,22 +562,22 @@ module OldPmfa = struct
     in
     (* TODO: Make sure that array reads normalized for efficiency *)
     let rec termalg = function
-      | `Binop(`Select, a, i) -> 
-        if Term.equal i uq_term 
+      |  `Select (a, i) -> 
+        if ArithTerm.equal i uq_term 
         then (mk_const srk (uq_read a))
-        else (non_uq_read (a, i) :> ('a, typ_term) expr)
+        else (non_uq_read (a, i) :> ('a, typ_arith) expr)
       | `Ite (cond, bthen, belse) ->
         mk_ite srk (Formula.eval srk formalg cond) bthen belse
-      | open_term -> Term.construct srk open_term 
+      | open_term -> ArithTerm.construct srk open_term 
     and formalg = function
-      | `Atom (`Eq, x, y) -> 
-        let lhs = (Term.eval srk termalg x) in
-        let rhs = (Term.eval srk termalg y) in
+      | `Atom (`Arith (`Eq, x, y)) -> 
+        let lhs = (ArithTerm.eval srk termalg x) in
+        let rhs = (ArithTerm.eval srk termalg y) in
         mk_eq srk  lhs rhs   
-      | `Atom (`Leq, x, y) ->
-        mk_leq srk (Term.eval srk termalg x) (Term.eval srk termalg y)
-      | `Atom (`Lt, x, y) -> 
-        mk_lt srk (Term.eval srk termalg x) (Term.eval srk termalg y)
+      | `Atom (`Arith (`Leq, x, y)) ->
+        mk_leq srk (ArithTerm.eval srk termalg x) (ArithTerm.eval srk termalg y)
+      | `Atom (`Arith(`Lt, x, y)) -> 
+        mk_lt srk (ArithTerm.eval srk termalg x) (ArithTerm.eval srk termalg y)
       | open_formula -> Formula.construct srk open_formula
     in
     let reads_replaced = Formula.eval srk formalg body in
@@ -595,7 +595,8 @@ module OldPmfa = struct
     in
     let phi' = mk_forall_const srk uq_sym phi' in
     mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi'
-*)
+
+
   let pmfa_to_lia srk tf =
     let mfa, new_vars = to_mfa srk tf in
     let lia = mfa_to_lia srk mfa in
@@ -606,40 +607,44 @@ module OldPmfa = struct
 
 
 
-  let eliminate_stores srk phi = assert false
-  (*  let rec rewrite_store index node =
-      match Term.destruct srk node with
-      | `Store (a, i, v) ->
-        let i = Term.eval srk term_alg i in
-        let v = Term.eval srk term_alg v in
-        mk_ite srk (mk_eq srk i index) v (rewrite_store index a)
-      | `Var (ind, `TyArr) -> mk_select srk (mk_var srk ind `TyArr) index
-      | `App (a, []) -> mk_select srk (mk_const srk a) index
-      | _ -> assert false (*invalid_arg "ill-formed array store"*)
-    and  term_alg = function 
-      | `Binop(`Select, a, i) -> rewrite_store i a
-      | open_term -> Term.construct srk open_term
-    in
-    let alg = function
-      | `Atom (`Eq, x, y) ->
-        begin match expr_typ srk x with
-          | `TyArr ->
-            let index = mk_symbol srk `TyInt in
-            let lhs = rewrite_store (mk_const srk index) x in
-            let rhs = rewrite_store (mk_const srk index) y in
-            mk_forall_const srk index (mk_eq srk lhs rhs)
-          | _ -> mk_eq srk (Term.eval srk term_alg x) (Term.eval srk term_alg y)
-        end
-      | `Atom (`Lt, x, y) -> 
-        mk_lt srk (Term.eval srk term_alg x) (Term.eval srk term_alg y)
-      | `Atom (`Leq, x, y) ->
-        mk_leq srk (Term.eval srk term_alg x) (Term.eval srk term_alg y)
-      | open_formula -> Formula.construct srk open_formula
-    in
-    Formula.eval srk alg phi
-
-*)
-
+  
+ let eliminate_stores srk phi =
+  let mk_op op =
+    match op with
+    | `Eq -> mk_eq
+    | `Lt -> mk_lt
+    | `Leq -> mk_leq
+  in
+  let rec rewrite_store index node =
+    match ArrTerm.destruct srk node with
+    | `Store (a, i, v) ->
+      let i = ArithTerm.eval srk arith_alg i in
+      let v = ArithTerm.eval srk arith_alg v in
+      mk_ite srk (mk_eq srk i index) v (rewrite_store index a)
+    | `Var (ind, `TyArr) -> mk_select srk (mk_var srk ind `TyArr) index
+    | `App (a, []) -> mk_select srk (mk_const srk a) index
+    | `Ite (phi, a, b) -> 
+      mk_ite 
+        srk 
+        (Formula.eval srk alg phi) 
+        (rewrite_store index a)
+        (rewrite_store index b)
+    | _ -> assert false (*todo: func app*)
+  and  arith_alg = function
+    | `Select (a, i) -> rewrite_store i a
+    | `Ite (phi, x, y) -> mk_ite srk (Formula.eval srk alg phi) x y
+    | open_term -> ArithTerm.construct srk open_term
+  and alg = function
+    | `Atom (`Arith (op, x, y)) ->
+      (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
+    | `Atom(`ArrEq (a, b)) -> 
+      let index = mk_symbol srk `TyInt in
+      let lhs = rewrite_store (mk_const srk index) a in
+      let rhs = rewrite_store (mk_const srk index) b in
+      mk_forall_const srk index (mk_eq srk lhs rhs)
+    | open_formula -> Formula.construct srk open_formula
+  in
+  Formula.eval srk alg phi
 
   module Array_analysis (Iter : PreDomain) = struct
 
@@ -652,6 +657,36 @@ module OldPmfa = struct
         projed_form : 'a formula;
         flag : bool}
 
+    let unbooleanize srk phi =
+      let phi, _ = skolemize srk phi in 
+      Log.errorf "phi is %a\n" (Formula.pp srk) phi;
+      let symbols = symbols phi in
+      let map = Hashtbl.create 97 in
+      Symbol.Set.iter (fun ele ->
+          let int_sym = mk_symbol srk ~name:(show_symbol srk ele) `TyInt in
+          Hashtbl.add map ele int_sym)
+        (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyBool) symbols);
+      let phi_subst = 
+        substitute_const 
+          srk
+          (fun s -> 
+             if BatHashtbl.mem map s then
+               mk_eq srk (mk_one srk) (mk_const srk (BatHashtbl.find map s))
+             else
+               mk_const srk s)
+          phi
+      in
+      let bool_constrs =
+        BatHashtbl.fold (fun _ sym acc -> 
+            mk_or 
+              srk 
+              [mk_eq srk (mk_const srk sym) (mk_one srk);
+               mk_eq srk (mk_const srk sym) (mk_zero srk)] :: acc)
+          map
+          []
+      in
+      mk_and srk (phi_subst :: bool_constrs) 
+
     (* TODO:Clean up and actually use tf*)
     let abstract srk tf =
       let t1 = time "In abstract" in
@@ -662,16 +697,31 @@ module OldPmfa = struct
         | `TyBool -> flag := true; List.tl tr_symbols
         | _ -> tr_symbols 
       in
-      let tf = T.make ~exists:(T.exists tf) (eliminate_stores srk (T.formula tf)) tr_symbols in
+      Log.errorf "elim stores\n";
+      let phi = eliminate_stores srk (T.formula tf) in
+      Log.errorf "elim ite\n";
+      let phi = eliminate_ite srk phi in
+      Log.errorf "unbool\n";
+      let phi = unbooleanize srk phi in
+      Log.errorf "unbool done\n";
+      let tf = T.make ~exists:(T.exists tf) phi tr_symbols in
       let proj_ind, arr_map, tf_proj = projection srk tf in
+      Log.errorf "pre pmfa to lia\n";
       let lia = pmfa_to_lia srk tf_proj in
+      Log.errorf "pre miniscoping\n";
       let phi = Quantifier.miniscope srk (T.formula lia) in
+      Log.errorf "pre eq guided\n";
       let phi = Quantifier.eq_guided_qe srk phi in
+      Log.errorf "post eq guided\n";
       to_file srk phi "/Users/jakesilverman/Documents/duet/duet/REWRITE.smt2";
       let new_trs = List.filter (fun a -> not (List.mem a tr_symbols)) (T.symbols lia) in
+      Log.errorf "pre mbp %a \n" (Formula.pp srk) phi;
       let ground  = Quantifier.mbp_qe_inplace srk phi in
+      Log.errorf "post mbp\n";
       let ground_tf = TransitionFormula.make ~exists ground (T.symbols lia) in
+      Log.errorf "pre abstract \n";
       let iter_obj = Iter.abstract srk ground_tf in
+      Log.errorf "post abstract\n";
       to_file srk ground "/Users/jakesilverman/Documents/duet/duet/GROUND2.smt2";
       let t2 = time "EXIT abstract" in
       diff t1 t2 "ABSTRACT";
@@ -806,7 +856,7 @@ module OldPmfa = struct
       let noop_ground = Quantifier.miniscope srk noop_ground in
       let noop_ground = Quantifier.eq_guided_qe srk noop_ground in
       to_file srk noop_ground "/Users/jakesilverman/Documents/duet/duet/REWRITEGROUND.smt2";
-      let noop_ground = Quantifier.mbp_qe_inplace srk noop_ground in
+      (*let noop_ground = Quantifier.mbp_qe_inplace srk noop_ground in*)
       to_file srk noop_ground "/Users/jakesilverman/Documents/duet/duet/GROUNDELIM.smt2";
       let t5 = time "EXP SEC" in
       diff t4 t5 "EXP SEC";
@@ -822,6 +872,7 @@ module OldPmfa = struct
           [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
            mk_and srk [noop_ground; projed_right_lc]] 
       in
+      to_file srk exp_res_pre "/Users/jakesilverman/Documents/duet/duet/exp_phi_pre.smt2";
       let t6 = time "EXP TH" in
       diff t5 t6 "EXP TH";
       let map sym =  

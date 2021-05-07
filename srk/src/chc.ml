@@ -216,6 +216,8 @@ module Fp = struct
               (fun s -> not (Array.mem s postx)) 
               (mk_and srk [phix'; phiy']) 
           in
+          let phi' = Quantifier.miniscope srk phi' in
+          let phi' = Quantifier.eq_guided_qe srk phi' in
           (* TODO: try to remove the new quants via miniscoping/del procedure *)
           pre', post', phi')
       in
@@ -232,6 +234,8 @@ module Fp = struct
         let tf = TransitionFormula.make phi trs in
         let phi' = PD.exp srk trs (mk_const srk lc) (PD.abstract srk tf) in
         let phi' = mk_exists_consts srk (fun s -> List.mem s vars) phi' in
+        let phi' = Quantifier.miniscope srk phi' in
+        let phi' = Quantifier.eq_guided_qe srk phi' in
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         pre, post, phi' 
       in
