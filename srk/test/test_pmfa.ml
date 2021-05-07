@@ -95,17 +95,16 @@ let test_init () =
   let fp = Chc.Fp.create () in
   let fp = Chc.ChcSrkZ3.parse_file srk fp "/Users/jakesilverman/Documents/arraycopy2.smt2" in
   Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
-  let _, fp = Fp.unbooleanize srk fp in
-  Fp.eliminate_store srk fp;
-  Fp.eliminate_ite srk fp;
   let fp = Fp.normalize srk fp in
-  let classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
+  Pmfa.skolemize_chc srk fp;
+  let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
   BatHashtbl.iter (fun chcvar1 chcvar2 ->
       Log.errorf "\nchc var (%a, %n) is mapped to (%a, %n)\n" (Relation.pp fp) chcvar1.rel
         chcvar1.param (Relation.pp fp) chcvar2.rel chcvar2.param)
     classes;
   let cands = propose_offset_candidates_seahorn srk fp classes in
-  apply_offset_candidates srk fp classes cands;
+  let rule_classes2 = derive_offset_for_each_rule fp cands in
+  apply_offset_candidates srk fp rules_classes rule_classes2;
   Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
 
   assert false
@@ -124,6 +123,6 @@ let suite = "Pmfa" >:::
 
     (*"test_offset1" >:: test_offset1;*)
     (*"contupsuplin" >:: countupsuplin;*)
-    "test_offset_partitioning" >:: test_offset_partitioning; 
-    (*"test_init" >:: test_init;*)
+    (*"test_offset_partitioning" >:: test_offset_partitioning;*) 
+    "test_init" >:: test_init;
   ]
