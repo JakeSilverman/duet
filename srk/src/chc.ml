@@ -143,6 +143,8 @@ module Fp = struct
               (mk_and srk [phix'; phiy'])
               p_hy
           in
+          let phi' = Quantifier.miniscope srk phi' in
+          let phi' = Quantifier.eq_guided_qe srk phi' in
           (* TODO: try to remove the new quants via miniscoping/del procedure *)
           p_cy, p_hx, phi')
       in
