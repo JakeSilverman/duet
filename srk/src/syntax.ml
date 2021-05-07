@@ -1224,7 +1224,8 @@ module Formula = struct
     | `Proposition (`App (f, args)) -> mk_app _srk f args
     | `Ite (cond, bthen, belse) -> mk_ite _srk cond bthen belse
 
-  let rec eval srk alg phi = match destruct srk phi with
+  let rec eval srk alg phi = 
+      match destruct srk phi with
     | `Tru -> alg `Tru
     | `Fls -> alg `Fls
     | `Or disjuncts -> alg (`Or (List.map (eval srk alg) disjuncts))
@@ -1463,6 +1464,7 @@ let node_typ symbols label children =
         match typ, typ' with
         | `TyInt, `TyInt -> `TyInt
         | `TyInt, `TyReal | `TyReal, `TyInt | `TyReal, `TyReal -> `TyReal
+        | _, `TyBool -> invalid_arg "jek"
         | _, _ -> assert false)
       `TyInt
       children
@@ -1823,6 +1825,15 @@ let pp_smtlib2_gen ?(named=false) ?(env=Env.empty) ?(strings=Hashtbl.create 991)
       fprintf formatter "(< @[%a %a@])"
         (go env) x
         (go env) y
+    | Select, [a; i] ->
+      fprintf formatter "(select %a %a)"
+        (go env) a 
+        (go env) i
+    | Store, [a; i; v] ->
+      fprintf formatter "(store %a %a %a)"
+        (go env) a 
+        (go env) i
+        (go env) v
     | Exists (name, typ), [psi] | Forall (name, typ), [psi] ->
       let (quantifier_name, varinfo, psi) =
         match label with

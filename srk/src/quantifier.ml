@@ -2564,18 +2564,18 @@ let miniscope srk phi : 'a formula =
  * term to substitute in for var 0 *)
 let get_subst_candidate srk eqs = 
   let unfil_candidates = 
-    List.map (fun (f1, t1, f2, t2) -> 
+    List.map (fun (_, t1, _, t2) -> 
         match Term.destruct srk t1, Term.destruct srk t2 with
         | `Var (ind1, _), `Var (ind2, _) when ind1 = 0 && (not (ind2 = 0)) ->
           Some t2
         | `Var (ind1, _), `Var (ind2, _) when (not (ind1 = 0)) && ind2 = 0 ->
           Some t1
         | `Var(ind, _), _ when ind = 0 ->
-          if not (DecMap.mem 0 f2)
+          if not (Hashtbl.mem (free_vars t2) 0)
           then Some t2
           else None
         | _, `Var(ind, _) when ind = 0 -> 
-          if not (DecMap.mem 0 f1) 
+          if not (Hashtbl.mem (free_vars t1) 0) 
           then Some t1
           else None
         | _, _ ->  None) eqs
@@ -2637,23 +2637,31 @@ let eq_guided_qe srk phi =
       in
       let fls _ = assert false in
       let sub_pairs ind0 lst = 
-        List.map (fun ((f1, t1, f2, t2)) -> 
+        List.map (fun ((f1, t1, f2, t2)) ->
+            Log.errorf "t1 is %a" (Term.pp srk) t1;
+            Log.errorf "t2 is %a" (Term.pp srk) t2;
           DecMap.dec 1 f1, subst ind0 t1, DecMap.dec 1 f2, subst ind0 t2) 
         lst
       in
       begin match subst_term with
       | None ->
         let filter_pairs lst = 
-          List.filter (fun (f1, _, f2, _) -> 
-            (not (DecMap.mem 0 f1)) &&
-            (not (DecMap.mem 0 f2)))
+          List.filter (fun (_, t1, _, t2) ->
+              (not (Hashtbl.mem (free_vars t1) 0)) &&
+              (not (Hashtbl.mem (free_vars t2) 0))
+            (*(not (DecMap.mem 0 f1)) &&
+            (not (DecMap.mem 0 f2)*))
           lst
         in
+        Log.errorf "FLS in EQS\n";
         let eqs = sub_pairs fls (filter_pairs eqs) in
+        Log.errorf "fls in DISEQS\n";
         let diseqs = sub_pairs fls (filter_pairs diseqs) in
         eqs, diseqs, q_fun srk ~name typ phi
       | Some t ->
+        Log.errorf "FLS IN OWN %a\n" (Term.pp srk) t;
         let t' _ = subst fls t in
+        Log.errorf "t' is %a\n" (Term.pp srk) (t' ());
         let eqs = sub_pairs t' eqs in
         let diseqs = sub_pairs t' diseqs in
         eqs, diseqs, subst t' phi
@@ -2672,6 +2680,7 @@ let mbp_qe_inplace srk phi =
   let phi = eliminate_ite srk phi in
   let alg = function
     | `Quantify (qt, _, `TyInt, body) ->
+      Log.errorf "body is %a\n" (Formula.pp srk) body;
         (* TODO: Slight performance improvement if don't do/undo
          * the var substitution for every quantifier *)
         let rev_tbl = Hashtbl.create 97 in
