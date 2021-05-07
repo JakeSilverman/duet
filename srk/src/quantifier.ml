@@ -2307,3 +2307,385 @@ let local_project_cube srk exists model cube =
       |> List.filter (not % is_true))
     project
     cube
+
+
+
+
+
+(* Integer maps with a constant time "decrement all keys by k" operation *)
+module DecMap = struct
+  let empty = BatMap.empty,0
+  let add k v (map, c) = (BatMap.add (k - c) v map), c
+  let remove k (map, c) = BatMap.remove (k - c) map, c
+  let dec k (map, c) = map, c - k
+  let mem k (map, c) = BatMap.mem (k - c) map
+  let union dmap1 (m2, c2)= 
+    BatMap.foldi (fun k v m -> add (k + c2) v m) m2 dmap1
+  let of_enum e = BatMap.of_enum e, 0
+end
+
+let miniscope srk phi : 'a formula =
+  (* The miniscoping procedure works in two phases:
+   * the first phase pushes quantifier nodes of the input formula tree deeper
+   * into the tree (sometimes removing the quantifier altogether) 
+   * and the second phase takes care of updating the debruijn
+   * indices. The two phases serve to minimize the number of passes
+   * through the input formula. As such, the first phase requires that we attach
+   * to each node of the formula tree enough information to remap the debruijn
+   * variables. We acheive this by adding to each node of the formula tree
+   * (1) a "delta" value, denoting the number of ancestor quantifier nodes that 
+   * are now descendant quantifier nodes
+   * and (2) a "rem" value denoting the number of ancestor quantifiers nodes 
+   * that were removed. We additionally add to each node of the formula tree 
+   * the free vars  in use that way we can avoid having to compute them multiple
+   * times.
+   *
+   * For the "rem" value, we further minimize the number of passes through the 
+   * formula by delaying propogation of information (by this I mean if a 
+   * quantifier is deleted upon seeing ancestor of node n, then we ought to
+   * increment n's rem value by 1 but we delay this).
+   **)
+  let flip (qtyp, name, typ) =
+    match qtyp with
+    | `Exists -> `Forall, name, typ
+    | `Forall -> `Exists, name, typ
+  in
+  let pass_thru qtyp expr_typ =
+    match qtyp, expr_typ with
+    | `Exists, `Exists -> `Pass
+    | `Exists, `Forall -> `Blocking
+    | `Forall, `Forall -> `Pass
+    | `Forall, `Exists -> `Blocking
+    | `Forall, `And -> `Pass
+    | `Exists, `And -> `Blocking
+    | `Exists, `Or -> `Pass
+    | `Forall, `Or -> `Blocking
+  in
+  (* This is the logic for pushing the quantifier qnt into formula node.
+   * delta denotes the number of quantifiers that have by passed so far and
+   * tot_rem denotes the total number of quantifiers that were removed in the
+   * formula prior to node.
+   * *)
+  let rec pushdown delta tot_rem qnt node =
+    let qtyp (qtyp, _, _) = qtyp in
+    let vars, loc_rem, delta_n, content = node in
+    let tot_rem' = tot_rem + loc_rem in
+    let is_q_used del vars = DecMap.mem (delta + del) vars in
+    if not (is_q_used tot_rem' vars)
+    then (vars, loc_rem + 1, delta_n, content)
+    else (
+      (* vars' is used in the case that the quantifier is pushed down. We both
+       * remove the free variable associated with this quantifier from vars and
+       * we decrement the index of all remaining free vars by 1*)
+      let vars' = DecMap.dec 1 (DecMap.remove (delta + tot_rem') vars) in
+      match content with
+      | `Tru -> node
+      | `Fls -> node
+      (* TODO: distribute over ITE, or elim ITE. Will do this after ITE elim is
+       * working w/ arrays *)
+      (* Observe that the delta value for
+       * this quantifier node is `-(delta + tot_rem)`. The `-delta` term comes
+       * from the number of quantifier nodes that were previously children that
+       * are now ancestors. The tot_rem factor is necessary to balance the way
+       * we lazily propogate the number of ancestor quantifier nodes that have
+       * been removed.*)
+      | `Atom _  | `Prop _ | `Ite _ ->
+        vars', 
+        0, 
+        -(delta + tot_rem), 
+        `Quantifier(qnt, node)
+      | `Not node ->
+        vars', 
+        loc_rem, 
+        delta_n + 1, 
+        `Not(pushdown delta tot_rem' (flip qnt) node)
+      | `Junct (jtyp, juncts) ->
+        let l1, l2 = 
+          List.partition (fun (vars, d, _, _) -> 
+              is_q_used (tot_rem' + d) vars) 
+            juncts
+        in
+        if List.length l2 > 0 then (
+          (* The `dec` is necessary because of lazy propogation of del qnts *)
+          let l1vars = 
+            List.fold_left
+              DecMap.union
+              DecMap.empty
+              (List.map (fun (vars, d, _, _) -> DecMap.dec d vars) l1)
+          in
+          let l1_node = 
+            pushdown 
+              delta 
+              tot_rem' 
+              qnt 
+              (l1vars, 0, delta_n, (`Junct (jtyp, l1))) 
+          in
+          let l2 = List.map (fun (v, r, d, c) -> v, r + 1, d, c) l2 in
+          let c = `Junct(jtyp, l1_node :: l2) in
+          vars', loc_rem, delta_n + 1, c)
+        else if pass_thru (qtyp qnt) jtyp = `Pass || List.length l1 <= 1 then (
+          let c = `Junct (jtyp, (List.map (pushdown delta tot_rem' qnt) l1)) in
+          vars', loc_rem, delta_n + 1, c)
+        else 
+          vars', 
+          0,
+          - (delta + tot_rem),
+          `Quantifier (qnt, node)
+      | `Quantifier((q, n, t), node') ->
+        if pass_thru (qtyp qnt) q = `Blocking then
+          (vars', 
+          0,
+           -(delta + tot_rem),
+          `Quantifier(qnt,  node))
+        else (
+          vars',
+          loc_rem,
+          delta_n + 1,
+          `Quantifier((q, n, t), pushdown (delta + 1) tot_rem' qnt node')))
+  in
+  let free_vars_map expr = DecMap.of_enum (BatHashtbl.enum (free_vars expr)) in
+  (* Each append to each node in the formula tree 3 pieces of data:
+   * 1) the free vars in the subexpression
+   * 2) the number at quantifiers that have been deleted at this node
+   * 3) the number of quantifiers that were previously ancestors and are now
+   * descendants
+   **)
+  let alg = function
+    | `Tru -> DecMap.empty,0,0,`Tru
+    | `Fls -> DecMap.empty,0,0,`Fls
+    | `Atom (`Arith (`Eq, x, y)) ->
+      DecMap.union (free_vars_map x) (free_vars_map y),
+      0,
+      0,
+      `Atom(mk_eq srk x y)
+    | `Atom ( `Arith (`Lt, x, y)) ->
+      DecMap.union (free_vars_map x) (free_vars_map y),
+      0,
+      0,
+      `Atom(mk_lt srk x y)
+    | `Atom (`Arith (`Leq, x, y)) ->
+      DecMap.union (free_vars_map x) (free_vars_map y),0,0,`Atom(mk_leq srk x y)
+    |  `Atom (`ArrEq (a, b)) ->
+      DecMap.union (free_vars_map a) (free_vars_map b),0,0,`Atom(mk_arr_eq srk a b)
+    | `And conjuncts ->
+      let vars = 
+        List.fold_left
+          DecMap.union
+          DecMap.empty
+          (List.map (fun (vars, del, _,  _) -> DecMap.dec del vars) conjuncts)
+      in
+      vars,0, 0, `Junct(`And, conjuncts)
+    | `Or disjuncts ->
+      let vars = 
+        List.fold_left
+          DecMap.union
+          DecMap.empty
+          (List.map (fun (vars, del, _, _) -> DecMap.dec del vars) disjuncts)
+      in
+      vars, 0, 0, `Junct(`Or, disjuncts)
+    | `Quantify (qtyp, name, typ, sexpr) ->
+      pushdown 0 0 (qtyp, name, typ) sexpr
+    | `Not (vars, q_del, delet, content) -> 
+      DecMap.dec q_del vars, 0, 0, `Not(vars, q_del, delet, content)
+    | `Proposition (`Var i) -> 
+      DecMap.add i `TyBool (DecMap.empty), 0, 0, `Prop(mk_var srk i `TyBool)
+    | `Proposition (`App (p, args)) -> 
+      free_vars_map (mk_app srk p args), 0, 0, `Prop(mk_app srk p args)
+    | `Ite (cond, bif, belse) ->
+      let vars1, _, _, _ = cond in
+      let vars2, _, _, _ = bif in
+      let vars3, _, _, _ = belse in
+      DecMap.union (DecMap.union vars1 vars2) vars3, 0, 0, `Ite(cond, bif, belse)
+  in
+  let mk_junc op =
+    match op with
+    | `Or -> mk_or srk
+    | `And -> mk_and srk
+  in
+  let mk_q op =
+    match op with
+    | `Exists -> mk_exists srk
+    | `Forall -> mk_forall srk
+  in
+  let q_map = BatHashtbl.create 97 in
+  (* This function the reconstructs a formula tree *)
+  let rec reconstruct_expr tot_del depth node =
+    let _,q_del, delta_n, content = node in
+    let tot_del' = tot_del + q_del in
+    (* The original depth of a given node is `depth + tot_del' + delta_n`.
+     * Observe that this is simply the depth in the new subtree plus the number
+     * of ancestor quantifiers that were deleted plus the number of ancestor
+     * quantifiers that became children.*)
+    match content with
+    | `Tru -> mk_true srk
+    | `Fls -> mk_false srk
+    | `Atom phi | `Prop phi ->
+        let subst t = 
+          substitute srk (fun (i, _) ->
+              (* We subtract 1 because we count qnts are 0 indexed *)
+            let (q_depth, typ) = 
+              Hashtbl.find q_map (depth + tot_del' + delta_n  - i - 1) 
+            in
+            mk_var srk (depth - q_depth - 1) typ)
+          t
+        in
+        subst phi
+    | `Not node -> mk_not srk (reconstruct_expr tot_del' depth node)
+    | `Ite (bcond, bif, bthen) ->  
+      mk_ite 
+        srk 
+        (reconstruct_expr tot_del' depth bcond)
+        (reconstruct_expr tot_del' depth bif)
+        (reconstruct_expr tot_del' depth bthen)
+    | `Junct(op, juncts) -> 
+      (mk_junc op) (List.map (reconstruct_expr tot_del' depth) juncts)
+    | `Quantifier ((qtyp, name, typ), node) ->
+      (* We add the quantifiers to the hashtbl in consecutive sequential order
+       * according to their placement in the original formula *)
+      Hashtbl.add q_map (depth + tot_del' + delta_n) (depth, typ);
+      (mk_q qtyp) ~name typ (reconstruct_expr tot_del' (depth + 1) node)
+  in
+  reconstruct_expr 0 0 (Formula.eval srk alg phi)
+
+
+
+
+
+
+
+
+(* Given a list of equalities, find a candidate
+ * term to substitute in for var 0 *)
+let get_subst_candidate srk eqs = 
+  let unfil_candidates = 
+    List.map (fun (f1, t1, f2, t2) -> 
+        match Term.destruct srk t1, Term.destruct srk t2 with
+        | `Var (ind1, _), `Var (ind2, _) when ind1 = 0 && (not (ind2 = 0)) ->
+          Some t2
+        | `Var (ind1, _), `Var (ind2, _) when (not (ind1 = 0)) && ind2 = 0 ->
+          Some t1
+        | `Var(ind, _), _ when ind = 0 ->
+          if not (DecMap.mem 0 f2)
+          then Some t2
+          else None
+        | _, `Var(ind, _) when ind = 0 -> 
+          if not (DecMap.mem 0 f1) 
+          then Some t1
+          else None
+        | _, _ ->  None) eqs
+  in
+  let filtered_candidates = 
+    List.filter (fun cand ->
+        match cand with
+        | Some _ -> true
+        | None -> false) 
+      unfil_candidates
+  in
+  if List.length filtered_candidates = 0 then None
+  else (List.hd filtered_candidates)
+
+
+(* I found that running this procedure multiple times yields much better
+ * results. *)
+let eq_guided_qe srk phi =
+  (* TODO: improve intersect *)
+  let intersect _ = [] in
+  let union lsts = List.flatten lsts in
+  let free_vars_map expr = DecMap.of_enum (BatHashtbl.enum (free_vars expr)) in
+  let alg = function
+    | `Tru -> ([], [], mk_true srk)
+    | `Fls -> ([], [], mk_false srk)
+    | `Atom (`Arith (`Eq, x, y)) -> 
+        ([free_vars_map x, (x :> 'a term), free_vars_map y, (y :> 'a term)], [], mk_eq srk x y)
+    | `Atom (`ArrEq (a, b)) ->
+      ([free_vars_map a, (a :> 'a term), free_vars_map b, (b :> 'a term)], [], mk_arr_eq srk a b)
+    (* TODO: May be nice to use lt and leq terms to determine additional equalities *)
+    | `Atom (`Arith (`Lt, x, y)) -> ([], [], mk_lt srk x y)
+    | `Atom (`Arith (`Leq, x, y)) -> ([], [], mk_leq srk x y)
+    | `And conjuncts ->
+      let (eqs, diseqs, conjs) = 
+        List.fold_left (fun (eqs, diseqs, conjs) (eq, diseq, conj) ->
+            eq :: eqs, diseq :: diseqs, conj :: conjs)
+          ([], [], [])
+          conjuncts
+      in
+      union eqs, intersect diseqs, mk_and srk conjs
+    | `Or disjuncts ->
+       let (eqs, diseqs, disjs) = 
+        List.fold_left (fun (eqs, diseqs, disjs) (eq, diseq, disj) ->
+            eq :: eqs, diseq :: diseqs, disj :: disjs)
+          ([], [], [])
+          disjuncts
+      in
+      intersect eqs, union diseqs, mk_or srk disjs
+    | `Quantify (qtyp, name, typ, (eqs, diseqs, phi)) ->
+      let q_fun, cand_lst = 
+        if qtyp = `Forall then mk_forall, diseqs else mk_exists, eqs
+      in
+      let subst_term = get_subst_candidate srk cand_lst in
+      (* TODO: Better to just do one big subst at end *)
+      let subst ind0 phi =
+        substitute srk (fun (ind, typ) ->
+          if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
+          phi
+      in
+      let fls _ = assert false in
+      let sub_pairs ind0 lst = 
+        List.map (fun ((f1, t1, f2, t2)) -> 
+          DecMap.dec 1 f1, subst ind0 t1, DecMap.dec 1 f2, subst ind0 t2) 
+        lst
+      in
+      begin match subst_term with
+      | None ->
+        let filter_pairs lst = 
+          List.filter (fun (f1, _, f2, _) -> 
+            (not (DecMap.mem 0 f1)) &&
+            (not (DecMap.mem 0 f2)))
+          lst
+        in
+        let eqs = sub_pairs fls (filter_pairs eqs) in
+        let diseqs = sub_pairs fls (filter_pairs diseqs) in
+        eqs, diseqs, q_fun srk ~name typ phi
+      | Some t ->
+        let t' _ = subst fls t in
+        let eqs = sub_pairs t' eqs in
+        let diseqs = sub_pairs t' diseqs in
+        eqs, diseqs, subst t' phi
+      end
+    | `Not (eqs, diseqs, phi) -> (diseqs, eqs, mk_not srk phi)
+    | `Proposition (`Var ind) -> ([], [], mk_var srk ind `TyBool) 
+    | `Proposition (`App (f, args)) -> ([], [], mk_app srk f args)
+    | `Ite ((_, _, cond), (eq2, diseq2, bthen), (eq3, diseq3, belse)) -> 
+      intersect [eq2; eq3], diseq2 @ diseq3, mk_ite srk cond bthen belse
+    | _ -> assert false
+  in
+  let _, _, phi = Formula.eval srk alg phi in
+  phi
+
+let mbp_qe_inplace srk phi =
+  let phi = eliminate_ite srk phi in
+  let alg = function
+    | `Quantify (qt, _, `TyInt, body) ->
+        (* TODO: Slight performance improvement if don't do/undo
+         * the var substitution for every quantifier *)
+        let rev_tbl = Hashtbl.create 97 in
+        let tbl = Memo.memo (fun ind -> 
+            let fresh = mk_symbol srk `TyInt in
+            Hashtbl.add rev_tbl fresh (mk_var srk (ind - 1) `TyInt);
+            fresh)
+        in
+        let phi = substitute srk (fun (i, _) -> mk_const srk (tbl i)) body in
+        let phi = if qt = `Forall then mk_not srk phi else phi in
+        let phi' = (mbp srk (fun s -> not (s = (tbl 0))) phi) in
+        let phi' =  
+          (substitute_const
+             srk
+             (fun s -> 
+               if Hashtbl.mem rev_tbl s then Hashtbl.find rev_tbl s
+               else mk_const srk s)
+             phi')
+        in
+        if qt = `Forall then mk_not srk phi' else phi'
+    | open_form -> Formula.construct srk open_form
+  in
+  Formula.eval srk alg phi

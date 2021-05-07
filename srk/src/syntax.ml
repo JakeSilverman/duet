@@ -2204,3 +2204,10 @@ module ContextTable = struct
   let find table k = H.find table k.id
   let mem table k = H.mem table k.id
 end
+
+let to_file srk phi filename =
+  let chan = Stdlib.open_out filename in
+  let formatter = Format.formatter_of_out_channel chan in
+  pp_smtlib2 srk formatter phi;
+  Format.pp_print_newline formatter ();
+  Stdlib.close_out chan;
