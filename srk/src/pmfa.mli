@@ -27,3 +27,28 @@ val derive_offset_for_each_rule :
   (chcvar, (Chc.relation, int) Hashtbl.t) Hashtbl.t ->
   (int * chcvar, offset) Hashtbl.t
 
+
+module OldPmfa : sig
+  open Iteration
+  module V = Linear.QQVector
+  module M = Linear.QQMatrix
+  module Z = Linear.ZZVector
+  module T = TransitionFormula
+  val pmfa_to_lia : 'a context -> 'a T.t -> 'a T.t
+
+  val eliminate_stores : 'a context -> 'a formula -> 'a formula
+
+  (*val projection : 'a context ->'a formula -> Symbol.Set.t -> 'a t*)
+
+  (** Projects array trans. formula to lia trans formula at symbolic dimension.
+      Return is tuple containing:
+        projection index sym, primed and unprimed version,
+        mapping from array symbol to its lia symbol
+        lia trans. symbols and formula *)
+  val projection :  
+    'a context -> 'a T.t -> symbol * (symbol, symbol) Hashtbl.t * 'a T.t
+
+  module Array_analysis (Iter : PreDomain) : sig
+    include PreDomain
+  end
+end
