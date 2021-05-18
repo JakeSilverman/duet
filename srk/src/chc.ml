@@ -107,6 +107,7 @@ module Fp = struct
       let zero = [], [], mk_false srk in
       let one = [], [], mk_true srk in
       let add x y =
+        Log.errorf "START ADD";
         if is_zero x then y else if is_zero y then x
         else (
           let (fvc, fvh, phix) = x in
@@ -142,9 +143,10 @@ module Fp = struct
                 mk_exists srk ~name typ phi)
               (mk_and srk [phix'; phiy'])
               p_hy
-          in
-          let phi' = Quantifier.miniscope srk phi' in
-          let phi' = Quantifier.eq_guided_qe srk phi' in
+         in
+          Log.errorf "MUL4\n";
+          (*let phi' = Quantifier.miniscope srk phi' in
+          let phi' = Quantifier.eq_guided_qe srk phi' in*)
           (* TODO: try to remove the new quants via miniscoping/del procedure *)
           p_cy, p_hx, phi')
       in
@@ -185,7 +187,7 @@ module Fp = struct
               | None -> mk_const srk sym)
             phi'
         in
-        (* TODO: try to remove the new quants via miniscoping/del procedure *)
+       (* TODO: try to remove the new quants via miniscoping/del procedure *)
         p_c, p_h, phi' 
       in
       {mul; add; star; zero; one}
@@ -235,6 +237,7 @@ module Fp = struct
         fp.queries
         wg
     in
+    Log.errorf "END WG";
     wg
 
   let stratify fp =

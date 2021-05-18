@@ -497,3 +497,116 @@ let term_of_vec srk term_of_dim vec =
       mk_mul srk [mk_real srk coeff; term_of_dim dim])
   |> BatList.of_enum
   |> mk_add srk
+
+(* Given matrices A and B, find a matrix C whose rows constitute a basis for
+   the vector space { v : exists u. uA = vB } *)
+let max_rowspace_projection a b =
+  (* Create a system u*A - v*B = 0.  u's occupy even columns and v's occupy
+     odd. *)
+  let mat =
+    ref (QQMatrix.interlace_columns
+           (QQMatrix.transpose a)
+           (QQMatrix.transpose (QQMatrix.scalar_mul (QQ.of_int (-1)) b)))
+  in
+  let c = ref QQMatrix.zero in
+  let c_rows = ref 0 in
+  let mat_rows =
+    ref (BatEnum.fold (fun m (i, _) -> max m i) 0 (QQMatrix.rowsi (!mat)) + 1)
+  in
+
+  (* Loop through the columns col of A/B, trying to find a vector u and v such
+     that uA = vB and v has 1 in col's entry.  If yes, add v to C, and add a
+     constraint to mat that (in all future rows of C), col's entry is 0.  This
+     ensures that the rows of C are linearly independent. *)
+  (* to do: repeatedly solving super systems of the same system of equations
+       -- can be made more efficient *)
+  (QQMatrix.rowsi b)
+  |> (BatEnum.iter (fun (r, _) ->
+      let col = 2*r + 1 in
+      let mat' =
+        QQMatrix.add_row
+          (!mat_rows)
+          (QQVector.of_term QQ.one col)
+          (!mat)
+      in
+      match solve mat' (QQVector.of_term QQ.one (!mat_rows)) with
+      | Some solution ->
+        let c_row =
+          BatEnum.fold (fun c_row (entry, i) ->
+              if i mod 2 = 1 then
+                QQVector.add_term entry (i/2) c_row
+              else
+                c_row)
+            QQVector.zero
+            (QQVector.enum solution)
+        in
+        assert (not (QQVector.equal c_row QQVector.zero));
+        c := QQMatrix.add_row (!c_rows) c_row (!c);
+        mat := mat';
+        incr c_rows; incr mat_rows
+      | None -> ()));
+  !c
+
+let max_lds mA mB =
+  (* We have a system of the form Ax' = Bx, we need one of the form Ax' =
+     B'Ax.  If we can factor B = B'A, we're done.  Otherwise, we compute an
+     m-by-n matrix T' with m < n, and continue iterating with the system T'Ax'
+     = T'Bx. *)
+  let rec fix mA mB mT =
+    let mS = max_rowspace_projection mA mB in
+    (* Since matrices are sparse, need to account for 0-rows of B -- they
+       should always be in the max rowspace projection *)
+    let mT' =
+      SrkUtil.Int.Set.fold
+        (fun i (mT', nb_rows) ->
+           if QQVector.is_zero (QQMatrix.row i mB) then
+             let mT' =
+               QQMatrix.add_row nb_rows (QQVector.of_term QQ.one i) mT'
+             in
+             (mT', nb_rows + 1)
+           else
+             (mT', nb_rows))
+        (QQMatrix.row_set mA)
+        (mS, QQMatrix.nb_rows mB)
+      |> fst
+    in
+    if QQMatrix.nb_rows mB = QQMatrix.nb_rows mS then
+      match divide_right mB mA with
+      | Some mM ->
+        assert (QQMatrix.equal (QQMatrix.mul mM mA) mB);
+
+        (mT, mM)
+      | None ->
+        (* mS's rows are linearly independent -- if it has as many rows as B,
+           then the rowspace of B is contained inside the rowspace of A, and
+           B/A is defined. *)
+        assert false
+    else
+      fix (QQMatrix.mul mT' mA) (QQMatrix.mul mT' mB) (QQMatrix.mul mT' mT)
+
+  in
+  let dims =
+    SrkUtil.Int.Set.elements
+      (SrkUtil.Int.Set.union (QQMatrix.row_set mA) (QQMatrix.row_set mB))
+  in
+  let (mT, mM) = fix mA mB (QQMatrix.identity dims) in
+  (* Remove coordinates corresponding to zero rows of T*A *)
+  let mTA = QQMatrix.mul mT mA in
+  let mTA_rows = QQMatrix.row_set mTA in
+  BatEnum.foldi (fun i row (mT', mM') ->
+      let mT' =
+        QQMatrix.add_row i (QQMatrix.row row mT) mT'
+      in
+      let mM' =
+        let mM_row = QQMatrix.row row mM in
+        let rowi =
+          BatEnum.foldi (fun j col v ->
+              QQVector.add_term (QQVector.coeff col mM_row) j v)
+            QQVector.zero
+            (SrkUtil.Int.Set.enum mTA_rows)
+        in
+        QQMatrix.add_row i rowi mM'
+      in
+      (mT', mM'))
+    (QQMatrix.zero, QQMatrix.zero)
+    (SrkUtil.Int.Set.enum mTA_rows)
