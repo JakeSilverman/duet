@@ -2632,8 +2632,6 @@ let eq_guided_qe srk phi =
       let fls _ = assert false in
       let sub_pairs ind0 lst = 
         List.map (fun ((f1, t1, f2, t2)) ->
-            Log.errorf "t1 is %a" (Term.pp srk) t1;
-            Log.errorf "t2 is %a" (Term.pp srk) t2;
           DecMap.dec 1 f1, subst ind0 t1, DecMap.dec 1 f2, subst ind0 t2) 
         lst
       in
@@ -2647,15 +2645,11 @@ let eq_guided_qe srk phi =
             (not (DecMap.mem 0 f2)*))
           lst
         in
-        Log.errorf "FLS in EQS\n";
         let eqs = sub_pairs fls (filter_pairs eqs) in
-        Log.errorf "fls in DISEQS\n";
         let diseqs = sub_pairs fls (filter_pairs diseqs) in
         eqs, diseqs, q_fun srk ~name typ phi
       | Some t ->
-        Log.errorf "FLS IN OWN %a\n" (Term.pp srk) t;
         let t' _ = subst fls t in
-        Log.errorf "t' is %a\n" (Term.pp srk) (t' ());
         let eqs = sub_pairs t' eqs in
         let diseqs = sub_pairs t' diseqs in
         eqs, diseqs, subst t' phi
@@ -2670,11 +2664,20 @@ let eq_guided_qe srk phi =
   let _, _, phi = Formula.eval srk alg phi in
   phi
 
+let rec quantify_all srk body =
+  if Hashtbl.length (free_vars body) > 0 then
+    quantify_all srk (mk_exists srk `TyInt body)
+  else body
+(*
 let mbp_qe_inplace srk phi =
   let phi = eliminate_ite srk phi in
+  let count = ref 0 in
+  let last_qt = ref None in
   let alg = function
     | `Quantify (qt, _, `TyInt, body) ->
-      Log.errorf "body is %a\n" (Formula.pp srk) body;
+      let body_temp = quantify_all srk body in
+      to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!count)) ^ ".smt2");
+      count := !count + 1;
         (* TODO: Slight performance improvement if don't do/undo
          * the var substitution for every quantifier *)
         let rev_tbl = Hashtbl.create 97 in
@@ -2698,3 +2701,92 @@ let mbp_qe_inplace srk phi =
     | open_form -> Formula.construct srk open_form
   in
   Formula.eval srk alg phi
+   *)
+(*
+let mbp_qe_inplace srk phi =
+  let phi = eliminate_ite srk phi in
+  let counter = ref 0 in
+  let perform_substs (typ, count, body) : 'a formula =
+    match typ with
+    | None -> assert (count = 0); body
+    | Some typ ->
+      Log.errorf "count is %n\n\n" count;
+      (*Log.errorf "Phi before here is %a\n\n" (Formula.pp srk) body;*)
+      let body_temp = quantify_all srk body in
+      Log.errorf "BREAK AFTER substs perform";
+      to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!counter)) ^ ".smt2");
+      counter := !counter + 1;
+      let syms = Hashtbl.create 97 in
+      let rev_tbl = Hashtbl.create 97 in
+      let tbl = Memo.memo (fun ind -> 
+          let fresh = mk_symbol srk `TyInt in
+          (if ind < count then Hashtbl.add syms fresh ()
+           else
+             Hashtbl.add rev_tbl fresh (mk_var srk (ind - count) `TyInt));
+          fresh)
+      in
+      let phi = substitute srk (fun (i, _) -> mk_const srk (tbl i)) body in
+      let phi = if typ = `Forall then mk_not srk phi else phi in
+      Log.errorf "Body at this point is \n" (*(Formula.pp srk) body*);
+      let phi' = (mbp srk (fun s -> not (Hashtbl.mem syms s)) phi) in
+      let phi' =  
+        (substitute_const
+           srk
+           (fun s -> 
+              if Hashtbl.mem rev_tbl s then Hashtbl.find rev_tbl s
+              else mk_const srk s)
+           phi')
+      in
+      (*Log.errorf "phi after here is %a\n" (Formula.pp srk) phi';*)
+      if typ = `Forall then mk_not srk phi' else phi'
+  in
+  let alg = function
+    | `Tru -> (None, 0, mk_true srk)
+    | `Fls -> None, 0, mk_false srk
+    | `And conjuncts -> None, 0, mk_and srk (List.map perform_substs conjuncts)
+    | `Or disjuncts -> None, 0, mk_or srk (List.map perform_substs disjuncts)
+    | `Not a -> None, 0, mk_not srk (perform_substs a)
+    | `Quantify (qt, _, `TyInt, (last_qt, count, body)) ->
+      if last_qt = Some qt then (last_qt, count + 1, body)
+      else (Some qt, 1, perform_substs (last_qt, count, body))
+(*None, 0, perform_substs (Some qt, 1, body)*)
+    | `Ite (cond, bthen, belse) -> 
+      None, 0, mk_ite srk (perform_substs cond) (perform_substs bthen) (perform_substs belse)
+    | `Quantify _ -> assert false
+    | `Atom a -> None, 0, Formula.construct srk (`Atom a)
+    | `Proposition _ -> assert false
+    (*| `Propositon a -> None, 0, Formula.construct srk (`Propositon a)*)
+  in
+  perform_substs (Formula.eval srk alg phi)
+*)
+
+
+
+
+let mbp_qe_inplace srk phi =
+  let count = ref 0 in
+  let qp, matr = normalize srk phi in
+  to_file srk matr ("/Users/jakesilverman/Documents/duet/duet/NORMALIZE.smt2");
+  List.iter (fun (qt, _) ->
+      if qt = `Forall then Log.errorf "FORALL\n" else Log.errorf "EXISTS";)
+    qp;
+  let remove_quant quant_typ syms matr =
+    let body_temp = quantify_all srk matr in
+    to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!count)) ^ ".smt2");
+
+    count := !count + 1;
+    if quant_typ = None then matr
+    else if Option.get quant_typ = `Forall then
+      mk_not srk (mbp srk (fun sym -> not (List.mem sym syms)) (mk_not srk matr))
+    else mbp srk (fun sym -> not (List.mem sym syms))  matr
+  in
+  let qt, syms, matr =
+    List.fold_right
+      (fun (qt, sym) (quant_typ, syms, matr) ->
+         if quant_typ = None then (Some qt, [sym], matr)
+         else if Option.get quant_typ = qt then (quant_typ, sym :: syms, matr)
+         else (Some qt, [sym], remove_quant quant_typ syms matr))
+      qp
+      (None, [], matr)
+  in
+  remove_quant qt syms matr

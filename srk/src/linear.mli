@@ -106,6 +106,13 @@ val periodic_rational_spectral_decomposition : QQMatrix.t ->
  *)
 val jordan_chain : QQMatrix.t -> QQ.t -> QQVector.t -> QQVector.t list
 
+(** Given matrices [A] and [B] representing a system of equations [Ax' = Bx],
+    find a matrix [T] and a square matrix [M] such that [y' = My] is the
+    greatest linear dynamical system that approximates [Ax' = Bx], and [T] is
+    the linear transformation into the linear dynamical system.  That is, [TB
+    = MTA], and the rowspace of [TA] is maximal. *)
+val max_lds : QQMatrix.t -> QQMatrix.t -> QQMatrix.t * QQMatrix.t
+
 (** {2 Rational vector spaces} *)
 module QQVectorSpace : sig
   (** Vector spaces are represented by a list of basis vectors *)
