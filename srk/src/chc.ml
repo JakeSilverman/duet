@@ -107,7 +107,6 @@ module Fp = struct
       let zero = [], [], mk_false srk in
       let one = [], [], mk_true srk in
       let add x y =
-        Log.errorf "START ADD";
         if is_zero x then y else if is_zero y then x
         else (
           let (fvc, fvh, phix) = x in
@@ -237,7 +236,6 @@ module Fp = struct
         fp.queries
         wg
     in
-    Log.errorf "END WG";
     wg
 
   let stratify fp =

@@ -312,8 +312,8 @@ let apply_offset_formula srk arr_var_offsets phi =
       if var0 then
         mk_select srk a (mk_var srk 0 `TyInt), (merge_cells [base_arr_cell; cella], false)
       else begin match base_arr_cell with
-        | Cell (Zero) -> mk_select srk a term, (merge_cells [cell; cella], false)
-        | Cell(Symbol(sym)) -> mk_select srk a (mk_sub srk term (mk_const srk sym)), (merge_cells [cell; cella], false) 
+        | Cell (Zero) -> mk_select srk a (mk_floor srk (mk_div srk term (mk_int srk 4))), (merge_cells [cell; cella], false)
+        | Cell(Symbol(sym)) -> mk_select srk a (mk_floor srk (mk_div srk (mk_sub srk term (mk_const srk sym)) (mk_int srk 4))), (merge_cells [cell; cella], false) 
         | _ -> assert false
       end
     | `Ite (phi, (term1, (cell1, _)), (term2, (cell2, _))) ->
@@ -331,8 +331,8 @@ let apply_offset_formula srk arr_var_offsets phi =
       let i, (celli, _) = ArithTerm.eval srk apply_offset_arith i in
       let i_offset =
         match base_cell with
-        | Cell (Zero) -> i
-        | Cell(Symbol(sym)) -> mk_sub srk i (mk_const srk sym)
+        | Cell (Zero) -> mk_floor srk (mk_div srk i (mk_int srk 4))
+        | Cell(Symbol(sym)) -> mk_floor srk (mk_div srk (mk_sub srk i (mk_const srk sym)) (mk_int srk 4))
         | _ -> assert false
       in
 
@@ -453,7 +453,7 @@ module OldPmfa = struct
   let projection srk tf =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let j = mk_symbol srk ~name:"j" `TyInt in
-    let _ = mk_symbol srk ~name:"j'" `TyInt in
+    let j' = mk_symbol srk ~name:"j'" `TyInt in
 
     let f (trs, phi) (a, a') = 
       let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
@@ -468,13 +468,13 @@ module OldPmfa = struct
          phi]
     in
     let integer_trs, phi = 
-      List.fold_left f ((j, j) :: int_trs srk tf, T.formula tf) (arr_trs srk tf) 
+      List.fold_left f ((j, j') :: int_trs srk tf, T.formula tf) (arr_trs srk tf) 
     in
     (* TODO: This quantifies symbolic constants - is that an issue? *)
     let phi = 
       mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs)) phi 
     in
-    j, map, T.make (mk_and srk [phi(*; mk_eq srk (mk_const srk j) (mk_const srk j')*)]) integer_trs 
+    j, j', map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs 
 
   (* Convert from a pmfa formula to an mfa formula.
    * We achieve this by converting the pmfa formula to an equivalent formula
@@ -651,7 +651,8 @@ module OldPmfa = struct
 
     type 'a t = 
       { iter_obj : 'a Iter.t; 
-        proj_ind : Symbol.t; 
+        proj_ind : Symbol.t;
+        proj_indpost : Symbol.t;
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
         new_trs : (Symbol.t * Symbol.t) list;
         iter_trs : (Symbol.t * Symbol.t) list;
@@ -707,7 +708,7 @@ module OldPmfa = struct
       let phi = unbooleanize srk phi in
       Log.errorf "unbool done\n";
       let tf = T.make ~exists:(T.exists tf) phi tr_symbols in
-      let proj_ind, arr_map, tf_proj = projection srk tf in
+      let proj_ind, proj_indpost, arr_map, tf_proj = projection srk tf in
       Log.errorf "pre pmfa to lia\n";
       let lia = pmfa_to_lia srk tf_proj in
       to_file srk (T.formula lia) "/Users/jakesilverman/Documents/duet/duet/preqoptlia.smt2"; 
@@ -730,6 +731,7 @@ module OldPmfa = struct
       diff t1 t2 "ABSTRACT";
       {iter_obj;
        proj_ind;
+       proj_indpost;
        arr_map;
        new_trs;
        iter_trs=(T.symbols lia);
@@ -842,7 +844,6 @@ module OldPmfa = struct
     module E = ExpPolynomial
 
     let directional_vars srk phi trs =
-      Log.errorf "PHI IS %a\n\n\n" (Formula.pp srk) phi;
       List.flatten (
         List.filter_map (fun (x, x') ->
             let xt, xt' = mk_const srk x, mk_const srk x' in
@@ -863,7 +864,6 @@ module OldPmfa = struct
           trs)
 
     let something_direct srk phi trs symb_index directs lc =
-      Log.errorf "PHI is %a \n\n" (Formula.pp srk) phi;
       let ppdim f i = if i = -1 then Log.errorf "const" else pp_symbol srk f (symbol_of_int i) in
       let term_map = (fun i -> match Linear.sym_of_dim i with 
           | Some s' -> 
@@ -923,7 +923,8 @@ module OldPmfa = struct
             let iter_obj1 = Iter.abstract srk tr1 in
             let iter_proj1 = Iter.exp srk trs (mk_const srk exp1term) iter_obj1 in
             let iter_proj1 = mk_and srk [iter_proj1; mk_leq srk x j; mk_leq srk x' j] in  
-
+            Log.errorf "PHI 1 input formula is %a\n" (Formula.pp srk) phi1;
+            Log.errorf "ITER OBJ 1 IS %a\n" (Iter.pp srk trs) iter_obj1;
             to_file srk iter_proj1 "/Users/jakesilverman/Documents/duet/duet/iter-proj1.smt2";
             Log.errorf "Iter formula is %a\n" (Formula.pp srk) iter_proj1;
             let polka = Polka.manager_alloc_loose () in
@@ -933,6 +934,8 @@ module OldPmfa = struct
               |> SrkApron.formula_of_property
             in
             let iter_obj3 = Iter.abstract srk tr3 in
+            Log.errorf "ITER OBJ 3 input formula is %a\n" (Formula.pp srk) phi3;
+            Log.errorf "ITER OBJ IS %a\n" (Iter.pp srk trs) iter_obj3;
             let iter_proj3 = Iter.exp srk trs (mk_const srk exp2term) iter_obj3 in
             let iter_proj3 = mk_and srk [iter_proj3; mk_not srk (mk_leq srk x j); mk_not srk (mk_leq srk x' j)] in
 
@@ -983,19 +986,28 @@ module OldPmfa = struct
             in
             to_file srk iter1_comp "/Users/jakesilverman/Documents/duet/duet/iter1_comp.smt2";
             let lccnst = mk_and srk [mk_leq srk (mk_zero srk) (mk_const srk exp1term); mk_leq srk (mk_zero srk) (mk_const srk exp2term)] in
+            let comp_formula =
+              mk_and srk [iter1_comp; iter3_comp; hull_comp;
+                          mk_eq 
+                            srk 
+                            lc 
+                            (mk_add srk [mk_const srk exp2term;
+                                         mk_const srk exp1term;
+                                         mk_int srk 1])]
+            in
+            let bonly = mk_and srk [iter_proj3; mk_eq srk lc (mk_const srk exp2term)] in
+            let aonly =mk_and srk [iter_proj1; mk_eq srk lc (mk_const srk exp1term)] in 
             let entire_formula = 
               mk_or srk
-                [mk_and srk [iter_proj1; mk_eq srk lc (mk_const srk exp1term)];
-                 mk_and srk [iter_proj3; mk_eq srk lc (mk_const srk exp2term)];
-                 mk_and srk [iter1_comp; iter3_comp; hull_comp;
-                             mk_eq 
-                               srk 
-                               lc 
-                               (mk_add srk [mk_const srk exp2term;
-                                            mk_const srk exp1term;
-                                            mk_int srk 1])]]
+                [aonly;
+                 bonly;
+                 comp_formula]
+                 
             in
             let entire_formula = mk_and srk [entire_formula; lccnst] in
+            to_file srk hull_comp "/Users/jakesilverman/Documents/duet/duet/hull.smt2";
+            to_file srk aonly "/Users/jakesilverman/Documents/duet/duet/aonly.smt2";
+            to_file srk bonly "/Users/jakesilverman/Documents/duet/duet/bonly.smt2";
             to_file srk entire_formula "/Users/jakesilverman/Documents/duet/duet/counter.smt2";
             let final =
               mk_exists_consts
@@ -1003,9 +1015,8 @@ module OldPmfa = struct
                 (fun sym -> not (Symbol.Set.mem sym !exists))
                 entire_formula
             in
-            Log.errorf "final formula is %a\n" (Formula.pp srk) final;
+            to_file srk final "/Users/jakesilverman/Documents/duet/duet/final_quant.smt2";
             let final_qe = Quantifier.mbp_qe_inplace srk final in
-            Log.errorf "final formula is %a\n" (Formula.pp srk) final_qe;
             final_qe
             
           | Dec _ -> mk_true srk
@@ -1027,7 +1038,7 @@ module OldPmfa = struct
             Log.errorf "lts 2 is %a\n" (Lts.pp ppdim) lts2;
             Log.errorf "lts 3 is %a\n" (Lts.pp ppdim) lts3;
             ()*))
-        directs
+        directs, exp1term, exp2term
 
 
 
@@ -1041,7 +1052,7 @@ module OldPmfa = struct
       let lc_syms = Symbol.Set.to_list (symbols lc) in
       let projed = Quantifier.mbp 
           srk 
-          (fun sym -> List.mem sym (obj.proj_ind :: fresh_lc :: lc_syms @ (split_append obj.iter_trs)))
+          (fun sym -> List.mem sym (obj.proj_indpost :: obj.proj_ind :: fresh_lc :: lc_syms @ (split_append obj.iter_trs)))
           iter_proj
       in
       to_file srk projed "/Users/jakesilverman/Documents/duet/duet/PROJED.smt2";
@@ -1055,31 +1066,35 @@ module OldPmfa = struct
       to_file srk noop_ground "/Users/jakesilverman/Documents/duet/duet/ITERPRENEW.smt2";  
       let noop_ground = Quantifier.miniscope srk noop_ground in
       let noop_ground = Quantifier.eq_guided_qe srk noop_ground in
+      let noop_ground = Quantifier.mbp_qe_inplace srk noop_ground in
       to_file srk noop_ground "/Users/jakesilverman/Documents/duet/duet/REWRITEGROUND.smt2";
       to_file srk noop_ground "/Users/jakesilverman/Documents/duet/duet/GROUNDELIM.smt2";
       let t5 = time "EXP SEC" in
       diff t4 t5 "EXP SEC";
 
       let directs = directional_vars srk obj.projed_form obj.iter_trs in
-      let directs_res = something_direct srk obj.projed_form obj.iter_trs obj.proj_ind directs lc in
-      let projed_right_lc = substitute_const srk (fun sym -> if compare_symbol sym fresh_lc = 0 then lc else mk_const srk sym) projed in
+      let directs_res, exp1, exp2 = something_direct srk obj.projed_form obj.iter_trs obj.proj_ind directs lc in
+      let _ = substitute_const srk (fun sym -> if compare_symbol sym fresh_lc = 0 then lc else mk_const srk sym) projed in
       let noop_eqs = 
         List.map 
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
           obj.iter_trs
       in
-      let _ = mk_and srk directs_res in
+      let direct_res = mk_and srk directs_res in
+      let direct_res = mk_exists_const srk exp1 direct_res in
+      let direct_res = mk_exists_const srk exp2 direct_res in
+      to_file srk direct_res "/Users/jakesilverman/Documents/duet/duet/DIRECTRES.smt2";
       let exp_res_pre = 
         mk_or 
           srk 
           [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
-           mk_and srk [noop_ground; projed_right_lc]] 
+           mk_and srk [(*noop_ground;*) direct_res(*;projed_right_lc*)]] 
       in
       to_file srk exp_res_pre "/Users/jakesilverman/Documents/duet/duet/exp_phi_pre.smt2";
       let t6 = time "EXP TH" in
       diff t5 t6 "EXP TH";
       let map sym =  
-        if sym = obj.proj_ind 
+        if sym = obj.proj_ind || sym = obj.proj_indpost 
         then mk_var srk 0 `TyInt
         else if Hashtbl.mem obj.arr_map sym 
         then mk_select srk (mk_const srk (Hashtbl.find obj.arr_map sym)) 
