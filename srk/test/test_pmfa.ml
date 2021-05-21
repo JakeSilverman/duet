@@ -116,7 +116,7 @@ let test_init () =
   let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
   let trs = [] in
   let tf = TransitionFormula.make phi trs in
-  let _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
+  let _, _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
   let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
   to_file srk lia "/Users/jakesilverman/Documents/duet/duet/miniscoped.smt2";
   (*let lia = Quantifier.miniscope srk lia in

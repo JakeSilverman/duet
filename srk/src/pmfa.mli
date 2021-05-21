@@ -46,7 +46,7 @@ module OldPmfa : sig
         mapping from array symbol to its lia symbol
         lia trans. symbols and formula *)
   val projection :  
-    'a context -> 'a T.t -> symbol * (symbol, symbol) Hashtbl.t * 'a T.t
+    'a context -> 'a T.t -> symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t
 
   module Array_analysis (Iter : PreDomain) : sig
     include PreDomain

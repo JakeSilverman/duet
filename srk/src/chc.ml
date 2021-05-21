@@ -174,7 +174,6 @@ module Fp = struct
       let zero = emptyarr, emptyarr, mk_false srk in
       let one = emptyarr, emptyarr, mk_true srk in
       let add x y =
-        Log.errorf "START ADD";
         if is_zero x then y else if is_zero y then x
         else if is_one x || is_one y then one
         else (
@@ -189,11 +188,9 @@ module Fp = struct
                    mk_const srk (postx.(BatArray.findi ((=) sym) posty)))
               phiy
           in
-          Log.errorf "END ADD";
           prex, postx, mk_or srk [phix; rhs_new])
       in
       let mul x y =
-        Log.error "START MUL\n";
         let (prex, postx, phix) = x in
         let (prey, posty, phiy) = y in
         if is_zero x || is_zero y then zero
@@ -211,26 +208,20 @@ module Fp = struct
               with Not_found -> 
                 mk_const srk (post'.(BatArray.findi ((=) sym) posty)))
           in
-          Log.errorf "MUL1\n";
           let phiy' = substitute_sym srk rhs_subst phiy in
-          Log.errorf "MUL2\n";
           let phix' = substitute_sym srk lhs_subst phix in
-          Log.errorf "MUL3\n";
           let phi' = 
             mk_exists_consts 
               srk 
               (fun s -> not (Array.mem s postx)) 
               (mk_and srk [phix'; phiy']) 
           in
-          Log.errorf "MUL4\n";
           (*let phi' = Quantifier.miniscope srk phi' in
           let phi' = Quantifier.eq_guided_qe srk phi' in*)
           (* TODO: try to remove the new quants via miniscoping/del procedure *)
-          Log.errorf "END MUL";
           pre', post', phi')
       in
       let star (pre, post, phi) =
-        Log.errorf "START STAR";
         let module PD = (val pd : Iteration.PreDomain) in
         let (trs, vars) =
           BatArray.fold_lefti
@@ -245,7 +236,6 @@ module Fp = struct
         let phi' = mk_exists_consts srk (fun s -> List.mem s vars) phi' in
         (*let phi' = Quantifier.miniscope srk phi' in
         let phi' = Quantifier.eq_guided_qe srk phi' in*)
-        Log.errorf "END STAR";
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         pre, post, phi' 
       in
@@ -287,7 +277,6 @@ module Fp = struct
         wg
         fp.queries
     in
-    Log.errorf "END WG";
     wg
 
   let is_super_linear fp =
