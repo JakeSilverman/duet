@@ -595,6 +595,35 @@ let load_smtlib2 ?(context=Z3.mk_context []) srk str =
          | `Term _ -> invalid_arg "load_smtlib2")
   |> mk_and srk
 
+let load_smtlib2_file ?(context=Z3.mk_context []) srk str =
+  let z3 = context in
+  let ast = Z3.SMT.parse_smtlib2_file z3 str [] [] [] [] in
+  let sym_of_decl =
+    let cos =
+      Memo.memo (fun (name, typ) ->
+          mk_symbol srk ~name typ)
+    in
+    fun decl ->
+      let open Z3 in
+      let sym = FuncDecl.get_name decl in
+      match FuncDecl.get_domain decl with
+      | [] ->
+        cos (Symbol.to_string sym, typ_of_sort (FuncDecl.get_range decl))
+      | dom ->
+        let typ =
+          `TyFun (List.map typ_of_sort dom,
+                  typ_of_sort (FuncDecl.get_range decl))
+        in
+        cos (Symbol.to_string sym, typ)
+  in
+  Z3.AST.ASTVector.to_expr_list ast
+  |> List.map (fun expr ->
+         match Expr.refine_coarse srk (of_z3 srk sym_of_decl expr) with
+         | `Formula phi -> phi
+         | `Term _ -> invalid_arg "load_smtlib2")
+  |> mk_and srk
+
+
 let of_goal srk g =
   List.map (formula_of_z3 srk) (Z3.Goal.get_formulas g)
   |> mk_and srk

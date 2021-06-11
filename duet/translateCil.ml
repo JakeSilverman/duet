@@ -780,6 +780,13 @@ let parse filename =
   in
   Putil.with_temp_filename base ".i" go
 
+open CfgIr
+let parsesmt filename = {filename; funcs = []; 
+                  threads = []; entry_points = [];
+                  vars = []; types = []; globinit = None}
+
+
 let () =
   CmdLine.register_parser ("c", parse);
   CmdLine.register_parser ("i", parse_preprocessed);
+  CmdLine.register_parser ("smt2", parsesmt)
