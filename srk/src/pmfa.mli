@@ -38,6 +38,8 @@ module OldPmfa : sig
 
   val eliminate_stores : 'a context -> 'a formula -> 'a formula
 
+  val unbooleanize : 'a context -> 'a formula -> 'a formula
+
   (*val projection : 'a context ->'a formula -> Symbol.Set.t -> 'a t*)
 
   (** Projects array trans. formula to lia trans formula at symbolic dimension.

@@ -95,23 +95,34 @@ let test_offset_partitioning () =
   assert (equiv a3sym a5sym);
   assert (not (equiv a1sym a3sym))
 
+
+let time _ =
+  let t = Unix.gettimeofday () in
+  (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
+
+let diff t1 t2 s =
+  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+
+
+
 let test_init () =
+  let enter = time "ENTER INIT" in
   let fp = Chc.Fp.create () in
   let fp = Chc.ChcSrkZ3.parse_file srk fp "/Users/jakesilverman/Documents/arraycopy2.smt2" in
-  Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
+  let parse = time "INIT PARSED" in
+  diff enter parse "PARSED";
   let fp = Fp.normalize srk fp in
   Pmfa.skolemize_chc srk fp;
   let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
-  BatHashtbl.iter (fun chcvar1 chcvar2 ->
-      Log.errorf "\nchc var (%a, %n) is mapped to (%a, %n)\n" (Relation.pp fp) chcvar1.rel
-        chcvar1.param (Relation.pp fp) chcvar2.rel chcvar2.param)
-    classes;
   let cands = propose_offset_candidates_seahorn srk fp classes in
   let rule_classes2 = derive_offset_for_each_rule fp cands in
   apply_offset_candidates srk fp rules_classes rule_classes2;
+  let offset_time = time "POST OFFSETS" in
+  diff parse offset_time "OFFSETS TIME";
   let _, fp = Chc.Fp.unbooleanize srk fp in
-  Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
   let phi = Fp.query_vc_condition srk fp ad in
+  let vc_cond_time = time "VC COND" in
+  diff offset_time vc_cond_time "VC COND TIME";
   to_file srk phi "/Users/jakesilverman/Documents/duet/duet/vccond.smt2";
   let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
   let trs = [] in
@@ -128,10 +139,18 @@ let test_init () =
     | `Unknown -> `Unknown
     | `Sat -> `Unknown
   in 
+  let exit = time "EXIT INIT" in
+  diff enter exit "INIT";
   (if res = `No then Log.errorf "RES IS NO" else if
      res = `Unknown then Log.errorf "RES IS UKNNOWN" else
      Log.errorf "RES IS YES");
   assert (res = `No)
+
+let test_quant () =
+  let exp = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/duet/duet/VCCONDJEK.smt2" in
+  let phi' = Quantifier.miniscope srk exp in
+  Log.errorf "phi' is %a" (Formula.pp srk) phi';
+  assert true
 
 
 (*
@@ -167,5 +186,6 @@ let suite = "Pmfa" >:::
     (*"test_offset1" >:: test_offset1;*)
     (*"contupsuplin" >:: countupsuplin;*)
     (*"test_offset_partitioning" >:: test_offset_partitioning;*) 
-    "test_init" >:: test_init;
+    (*"test_init" >:: test_init*)
+    "test_quant" >:: test_quant
   ]
