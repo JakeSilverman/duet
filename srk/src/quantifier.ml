@@ -2773,9 +2773,6 @@ let mbp_qe_inplace srk phi =
   let count = ref 0 in
   let qp, matr = normalize srk phi in
   to_file srk matr ("/Users/jakesilverman/Documents/duet/duet/NORMALIZE.smt2");
-  List.iter (fun (qt, _) ->
-      if qt = `Forall then Log.errorf "FORALL\n" else Log.errorf "EXISTS";)
-    qp;
   let remove_quant quant_typ syms matr =
     let body_temp = quantify_all srk matr in
     to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!count)) ^ ".smt2");

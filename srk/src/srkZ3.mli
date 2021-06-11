@@ -101,6 +101,8 @@ val simplify : ?context:z3_context -> 'a context -> 'a formula -> 'a formula
 
 (** Parse a SMTLIB2-formatted string *)
 val load_smtlib2 : ?context:z3_context -> 'a context -> string -> 'a formula
+val load_smtlib2_file : ?context:z3_context -> 'a context -> string -> 'a formula
+
 
 (** Sequence interpolation.  Returns either a model of the formula or a
     sequence of interpolants if there is no model.  *)

@@ -2,7 +2,7 @@ open Core
 open Srk
 open CfgIr
 open BatPervasives
-
+open Iteration
 module RG = Interproc.RG
 module WG = WeightedGraph
 module TLLRF = TerminationLLRF
@@ -1114,10 +1114,93 @@ let _ =
      Arg.Clear precondition,
      " Synthesize mortal preconditions")
 
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
+
+ let time _ =
+    let t = Unix.gettimeofday () in
+    (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
+
+  let diff t1 t2 s = 
+    Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+
+let array_analyze file =
+  let z3 = Z3.mk_context [] in
+  let z3fp = Z3.Fixedpoint.mk_fixedpoint z3 in
+  let _ = Z3.Fixedpoint.parse_file z3fp file.filename in
+  Log.errorf "Z3 REP IS %s\n" (Z3.Fixedpoint.to_string z3fp);
+  let init = time "init" in
+  let fp = Chc.Fp.create () in
+  let fp = Chc.ChcSrkZ3.parse_file srk fp file.filename in
+  let fp = Chc.Fp.normalize srk fp in
+  Pmfa.skolemize_chc srk fp;
+  let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
+  Log.errorf "propose";
+  let cands = Pmfa.propose_offset_candidates_seahorn srk fp classes in
+  Log.errorf "yes propose";
+  let rule_classes2 = Pmfa.derive_offset_for_each_rule fp cands in
+  Pmfa.apply_offset_candidates srk fp rules_classes rule_classes2;
+  Log.errorf "FP is %a" (Chc.Fp.pp srk) fp;
+  let _, fp = Chc.Fp.unbooleanize srk fp in
+  let phi = Chc.Fp.query_vc_condition srk fp ad in
+  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
+  let phi = Syntax.eliminate_ite srk phi in
+  let phi = Pmfa.OldPmfa.unbooleanize srk phi in
+  Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDarray.smt2";
+  let vc_cond_time = time "vc_cond_time" in
+  diff init vc_cond_time "FIND VC COND ";
+  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
+  let trs = [] in
+  let tf = TransitionFormula.make phi trs in
+  let _, _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
+  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
+  Syntax.to_file srk lia "/Users/jakesilverman/Documents/duet/duet/VCCONDJEK.smt2";
+  (*let lia = Quantifier.eq_guided_qe srk lia in*)
+  Syntax.to_file srk lia "/Users/jakesilverman/Documents/duet/duet/MINISCOPEDVCCOND.smt2";
+  (*let lia = Syntax.mk_exists_consts srk (fun _ -> false) lia in
+  let qpf, phi = Quantifier.normalize srk lia in 
+  match Quantifier.winning_strategy srk qpf phi with
+  | `Unsat _  -> 
+    let final_time = time "final" in
+    diff vc_cond_time final_time "final time ";
+    logf ~level:`always "Safe"
+
+  | `Unknown -> logf ~level:`always "UnknownREAL"
+  | `Sat strat -> Log.errorf "strat is %a\n" (Quantifier.pp_strategy srk) strat; 
+    let final_time = time "final" in
+    diff vc_cond_time final_time "final time ";
+    logf ~level:`always "UnknownSAT"
+ *)
+  
+  (*let normal = Cqt.FineGrainStrategyImprovement.normalize srk lia in 
+  match Cqt.FineGrainStrategyImprovement.winning_strategy srk normal with
+  | `Unsat _  -> 
+    let final_time = time "final" in
+    diff vc_cond_time final_time "final time ";
+    logf ~level:`always "Safe"
+
+  | `Unknown -> logf ~level:`always "UnknownREAL"
+  | `Sat strat -> Log.errorf "strat is %a\n" (Cqt.FineGrainStrategyImprovement.pp_strategy srk) strat; 
+    let final_time = time "final" in
+    diff vc_cond_time final_time "final time ";
+    logf ~level:`always "UnknownSAT"*)
+  match Quantifier.simsat srk lia with
+    | `Unsat  -> 
+      let final_time = time "final" in
+      diff vc_cond_time final_time "final time ";
+      logf ~level:`always "Safe"
+    
+    | `Unknown -> logf ~level:`always "UnknownREAL"
+    | `Sat -> 
+      let final_time = time "final" in
+      diff vc_cond_time final_time "final time ";
+      logf ~level:`always "UnknownSAT"
+
 let _ =
   CmdLine.register_pass
     ("-cra", analyze, " Compositional recurrence analysis");
   CmdLine.register_pass
     ("-termination", prove_termination_main, " Proof of termination");
   CmdLine.register_pass
-    ("-rba", resource_bound_analysis, " Resource bound analysis")
+    ("-rba", resource_bound_analysis, " Resource bound analysis");
+  CmdLine.register_pass
+    ("-array-cra", array_analyze, " Comp rec array content analysis")
