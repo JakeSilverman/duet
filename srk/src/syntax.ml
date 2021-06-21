@@ -1864,16 +1864,7 @@ let pp_smtlib2_gen ?(named=false) ?(env=Env.empty) ?(strings=Hashtbl.create 991)
         (go env) cond
         (go env) bthen
         (go env) belse
-    | Select, [a; i] ->
-      fprintf formatter "(select %a %a)"
-        (go env) a
-        (go env) i
-    | Store, [a; i; v] ->
-      fprintf formatter "(store %a %a %a)"
-        (go env) a
-        (go env) i
-        (go env) v
-    | _ -> failwith "pp_smtlib2: ill-formed expression"
+   | _ -> failwith "pp_smtlib2: ill-formed expression"
   in
   List.iteri (fun i phi ->
     if named then

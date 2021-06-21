@@ -16,13 +16,19 @@ module Fp : sig
   (** Create fixed point object with no rules/queries *)
   val empty : 'a fp
   val add_rule : 'a fp -> proposition -> proposition list -> 'a formula -> 'a fp
+  val get_rules : 'a fp -> (proposition * proposition list * 'a formula) list
+  val map_rules : ((proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
+  val mapi_rules : (int -> (proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
+
   (** Adds query to fp and returns a fresh name for query *)
   val add_query : 'a fp -> symbol -> 'a fp
   (* Returns set of relations that occur in either a rule or query in fp *)
   (*val predicate_symbols : 'a fp -> Symbol.Set.t*)
   val pp : 'a context -> Format.formatter -> 'a fp -> unit
+  val pp_rule : 'a context -> Format.formatter -> (proposition * proposition list * 'a formula) -> unit  
   val show : 'a context  -> 'a fp -> string
 
+  val prop_symbols : 'a fp -> Symbol.Set.t
   (** [check srk fp pd] returns unknown if a query relation can
    * be reached in the fp where recursion over-approximated using the 
    * star operator of the provided predomain [pd] and returns no otherwise.*)
