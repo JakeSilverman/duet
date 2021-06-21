@@ -1,9 +1,34 @@
 open Syntax
 open Chc
 
+
+let typ_symbol_fo srk sym =
+    match typ_symbol srk sym with
+    | `TyInt -> `TyInt
+    | `TyReal -> `TyReal
+    | `TyBool -> `TyBool
+    | `TyArr -> `TyArr
+    (* TODO: arrays *)
+    | _ -> assert false
+  
+
 (* Replaces existentially bound vars with skolem constants.
  * Return is resulting formula together with set of skolem constants. *)
-let skolemize srk phi =
+let skolemize srk _ phi =
+  let vars_to_fv = BatHashtbl.create 97 in
+  let subst = 
+    Memo.memo (fun (ind, typ) ->
+        let sym = mk_symbol srk (typ :> typ) in
+        BatHashtbl.add vars_to_fv sym ind;
+        mk_const srk sym)
+  in
+  let phi = 
+    substitute
+      srk
+      subst phi
+  in
+
+  Log.errorf "Formula is %a" (Formula.pp srk) phi;
   let new_vars = ref (Symbol.Set.empty) in 
   let rec subst_existentials subst_lst expr =
     match Formula.destruct srk expr with
@@ -16,19 +41,41 @@ let skolemize srk phi =
     | `Or disjuncts ->
       mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
     | open_form ->
+      Log.errorf "New formula is %a" (Formula.pp srk) (Formula.construct srk open_form);
       (* TODO: make substitute more efficient *)
       substitute
         srk
-        (fun (i, _) -> mk_const srk (List.nth subst_lst i))
+        (fun (i, _) -> 
+             mk_const srk (List.nth subst_lst i))
         (Formula.construct srk open_form)
   in
   let phi' = subst_existentials [] phi in
+  let phi' =
+    substitute_sym
+      srk
+      (fun sym ->
+         if Hashtbl.mem vars_to_fv sym then
+           mk_var srk (Hashtbl.find vars_to_fv sym) (typ_symbol_fo srk sym)
+         else mk_const srk sym)
+      phi'
+  in
   phi', !new_vars
 
 let skolemize_chc srk fp =
-  let rules' = List.map (fun (hypo, rule, conc) -> 
-      hypo, fst (skolemize srk rule), conc) fp.rules in
-  fp.rules<-rules'
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      let start = 
+        List.fold_left (fun acc atom ->
+            acc + (List.length (Proposition.names_of atom)))
+          0
+          (conc :: hypo)
+      in
+      Log.errorf "START IS %n" start;
+      Log.errorf "RULE IS %a" (Chc.Fp.pp_rule srk) (conc, hypo, constr);
+      conc, hypo, fst (skolemize srk start constr)) 
+    fp
+
+
+type arrvar = Sym of symbol | Fv of int
 
 (* Assumes formula has already been skolemized *)
 let offset_partitioning srk phi =
@@ -43,8 +90,33 @@ let offset_partitioning srk phi =
    * to the same cell if their BatUref holds the same value *)
   let class_map = BatHashtbl.create 97 in
   Symbol.Set.iter (fun sym ->
-      BatHashtbl.add class_map sym (BatUref.uref sym))
+      BatHashtbl.add class_map (Sym sym) (BatUref.uref (Sym sym)))
     arrs;
+  let vars_to_fv = BatHashtbl.create 97 in
+  let subst = 
+    Memo.memo (fun (ind, typ) ->
+        if typ = `TyArr then (
+          BatHashtbl.add class_map (Fv ind) (BatUref.uref (Fv ind));
+          let sym = mk_symbol srk (typ :> typ) in
+          BatHashtbl.add vars_to_fv sym ind;
+          mk_const srk sym
+        )
+        else (
+          let sym = mk_symbol srk (typ :> typ) in
+          mk_const srk sym
+        ))
+  in
+
+  let phi = 
+    substitute
+      srk
+      subst phi
+  in
+  let sel a1 a2 = 
+    match a1, a2 with
+    | Fv i, _ -> Fv i
+    | _, b -> b
+  in
   (* Merge cells merges unifies the input equivalence classes "cells"
    * into a single cell and then returns a representative var sym for
    * the merged cell *)
@@ -55,6 +127,7 @@ let offset_partitioning srk phi =
         | v, None -> v
         | Some sym1, Some sym2 ->
           BatUref.unite 
+            ~sel
             (BatHashtbl.find class_map sym1) 
             (BatHashtbl.find class_map sym2);
           Some sym1)
@@ -66,7 +139,10 @@ let offset_partitioning srk phi =
    * of this array term and "cell" is a representative of the cell of arrays that
    * read from a (not bound within this term) univ quant var.*)
   let rec arr_term_alg = function
-    | `App (sym, lst) -> if lst = [] then [Some sym], None 
+    | `App (sym, lst) -> if lst = [] then (
+        if BatHashtbl.mem vars_to_fv sym then
+          [Some (Fv (BatHashtbl.find vars_to_fv sym))], None
+        else [Some (Sym sym)], None)
       else invalid_arg "offset_partitioning: Uninterp func not in pmfa"
     | `Var _ -> invalid_arg "offset_partitioning: must skolemize first"
     | `Ite (phi, (base1, cell1), (base2, cell2)) -> 
@@ -125,7 +201,7 @@ let offset_partitioning srk phi =
   class_map
 
 
-type chcvar = { rel : Relation.t; param : int} 
+type chcvar = { rel : symbol; param : int} 
 [@@deriving ord]
 
 module CHCVar = struct
@@ -133,16 +209,19 @@ module CHCVar = struct
 end
 
 module CHCVarSet = BatSet.Make(CHCVar)
-
+(* TODO: CHC with skolem consts *)
 let pmfa_chc_offset_partitioning srk fp =
-  let rels = Fp.get_active_relations fp in
+  let rels = Fp.prop_symbols fp in
   let chc_arr_vars = 
-    Relation.Set.fold (fun rel chcvarset ->
-        BatList.fold_lefti (fun chcvarset ind typ ->
-            if typ = `TyArr then CHCVarSet.add {rel;param=ind} chcvarset
-            else chcvarset)
-          chcvarset
-          (type_of fp rel))
+    Symbol.Set.fold (fun rel chcvarset ->
+        match typ_symbol srk rel with
+        | `TyFun (lst, `TyBool) ->
+          BatList.fold_lefti (fun chcvarset ind typ ->
+              if typ = `TyArr then CHCVarSet.add {rel;param=ind} chcvarset
+              else chcvarset)
+            chcvarset
+            lst
+        | _ -> chcvarset)
       rels
       CHCVarSet.empty
   in
@@ -156,25 +235,28 @@ let pmfa_chc_offset_partitioning srk fp =
       (BatHashtbl.find class_map b)
   in
   let rules_fv_cells = BatHashtbl.create 97 in
-  List.iteri (fun ind (hypos, constr, conc) ->
+  List.iteri (fun ind (conc, hypos, constr) ->
       let constr_partitioning = offset_partitioning srk constr in
       let fv_to_cells = BatHashtbl.create 97 in
       let cell_reps = BatHashtbl.create 97 in
+      let pcounter = ref 0 in
       List.iter (fun atom ->
-          List.iteri (fun ind sym ->
-              if (typ_symbol srk sym) = `TyArr &&
-                 BatHashtbl.mem constr_partitioning sym 
+          List.iteri (fun ind typ ->
+              if typ = `TyArr &&
+                 BatHashtbl.mem constr_partitioning (Fv (ind + !pcounter)) 
               then (
-                let chcvar = {rel=(rel_of_atom atom);param=ind} in
+                let chcvar = {rel=(Proposition.symbol_of atom);param=ind} in
                 let cell = 
-                  BatUref.uget (BatHashtbl.find constr_partitioning sym) 
-                in 
+                  BatUref.uget (BatHashtbl.find constr_partitioning (Fv (ind + !pcounter))) 
+                in
                 if BatHashtbl.mem cell_reps cell then
                   merge (BatHashtbl.find cell_reps cell) chcvar
                 else
                   BatHashtbl.add cell_reps cell chcvar)
               else ())
-            (params_of_atom atom))
+            (Proposition.typ_of_params srk atom);
+          pcounter := (List.length  (Proposition.typ_of_params srk atom)) + !pcounter
+        )
         (conc :: hypos);
       BatHashtbl.iter (fun fv cell ->
           let cell = BatUref.uget cell in
@@ -184,7 +266,7 @@ let pmfa_chc_offset_partitioning srk fp =
         constr_partitioning;
       BatHashtbl.add rules_fv_cells ind fv_to_cells
     )
-    fp.rules;
+    (Fp.get_rules fp);
   let classes = BatHashtbl.map (fun _ uref -> BatUref.uget uref) class_map in
   let rules_fv_cells = BatHashtbl.map (fun _ fv_to_cells -> 
       BatHashtbl.map (fun _ uref_opt -> 
@@ -196,13 +278,13 @@ let pmfa_chc_offset_partitioning srk fp =
   in
   classes, rules_fv_cells
 
-
+(*
 let verify_offset_candidates srk fp candidates =
-  let atom_has_cand atom = Hashtbl.mem candidates (rel_of_atom atom) in
+  let atom_has_cand atom = Hashtbl.mem candidates (Proposition.symbol_of atom) in
   let atom_candidate atom = 
     List.nth
       (params_of_atom atom) 
-      (Hashtbl.find candidates (rel_of_atom atom))
+      (Hashtbl.find candidates (Proposition.symbol_of atom))
   in
   List.fold_left (fun suitable (hypos, constr, conc) ->
       if not suitable then suitable
@@ -223,7 +305,7 @@ let verify_offset_candidates srk fp candidates =
         | `Yes -> true
         | _ -> false))
     true
-    fp.rules
+    fp.rules*)
 (* In the function apply_offset_formula we label each expression with an 
  * associated element of type offset. The offset is the value by which we
  * value by which we must increment the free var "0" where it does not occur
@@ -231,10 +313,34 @@ let verify_offset_candidates srk fp candidates =
  * contain the free var "0". Cell is the case where the increment must be by 
  * by a fixed term and unrestricted is the case where the offset has not yet
  * been locked to a specific term. *)
-type cell = Symbol of symbol | Zero
+type cell = Symbol of int | Zero
 type offset = DNA | Cell of cell | Unrestricted
 
-let apply_offset_formula srk arr_var_offsets phi =
+let apply_offset_formula srk arr_var_offsets phi props =
+  let fv_to_vars = BatHashtbl.create 97 in
+  let vars_to_fv = BatHashtbl.create 97 in
+
+  let param_counter = ref 0 in
+  List.iter (fun prop ->
+      param_counter := !param_counter + List.length (Proposition.typ_of_params srk prop);
+      Log.errorf "param coutner is %n" !param_counter
+    )
+    props;
+
+  let subst = 
+    Memo.memo (fun (ind, typ) ->
+        let sym = mk_symbol srk (typ :> typ) in
+        BatHashtbl.add vars_to_fv sym ind;
+        BatHashtbl.add fv_to_vars ind sym;
+        mk_const srk sym)
+  in
+
+  let phi = 
+    substitute
+      srk
+      subst phi
+  in
+
   let merge_cells cells =
     List.fold_left (fun acc cell ->
         match acc, cell with
@@ -279,7 +385,8 @@ let apply_offset_formula srk arr_var_offsets phi =
       begin match cell with
         | DNA -> assert false
         | Cell (Symbol sym) ->
-          mk_forall srk ~name `TyInt (subst (mk_const srk sym)), DNA
+          Log.errorf "ISHERE?";
+          mk_forall srk ~name `TyInt (subst (mk_const srk (Hashtbl.find fv_to_vars sym))), DNA
         | Cell (Zero)  
         | Unrestricted -> mk_forall srk ~name `TyInt (subst (mk_zero srk)), DNA
       end
@@ -313,7 +420,9 @@ let apply_offset_formula srk arr_var_offsets phi =
         mk_select srk a (mk_var srk 0 `TyInt), (merge_cells [base_arr_cell; cella], false)
       else begin match base_arr_cell with
         | Cell (Zero) -> mk_select srk a (mk_floor srk (mk_div srk term (mk_int srk 4))), (merge_cells [cell; cella], false)
-        | Cell(Symbol(sym)) -> mk_select srk a (mk_floor srk (mk_div srk (mk_sub srk term (mk_const srk sym)) (mk_int srk 4))), (merge_cells [cell; cella], false) 
+        | Cell(Symbol(sym)) -> 
+          Log.errorf "ISHERE2";
+          mk_select srk a (mk_floor srk (mk_div srk (mk_sub srk term (mk_const srk (Hashtbl.find fv_to_vars sym))) (mk_int srk 4))), (merge_cells [cell; cella], false) 
         | _ -> assert false
       end
     | `Ite (phi, (term1, (cell1, _)), (term2, (cell2, _))) ->
@@ -321,7 +430,14 @@ let apply_offset_formula srk arr_var_offsets phi =
       mk_ite srk phi term1 term2, (merge_cells [cell_phi; cell1; cell2], false)
     | _ -> assert false 
   and apply_offset_arr = function
-    | `App (sym, []) -> mk_const srk sym, Hashtbl.find arr_var_offsets sym, Unrestricted 
+    | `App (sym, []) -> 
+      Log.errorf "ISHERE3";
+     begin match BatHashtbl.find_option vars_to_fv sym with
+      | Some i ->
+        mk_const srk sym, Hashtbl.find arr_var_offsets (Fv i), Unrestricted
+      | None -> 
+        mk_const srk sym, Hashtbl.find arr_var_offsets (Sym sym), Unrestricted 
+     end
     | `Ite (phi, (term1, base_cell1, cell1), (term2, base_cell2, cell2)) ->
       let phi, cell_phi = Formula.eval srk apply_offset_formula phi in
       mk_ite srk phi term1 term2, 
@@ -332,7 +448,11 @@ let apply_offset_formula srk arr_var_offsets phi =
       let i_offset =
         match base_cell with
         | Cell (Zero) -> mk_floor srk (mk_div srk i (mk_int srk 4))
-        | Cell(Symbol(sym)) -> mk_floor srk (mk_div srk (mk_sub srk i (mk_const srk sym)) (mk_int srk 4))
+        | Cell(Symbol(sym)) -> 
+          Log.errorf "ISHERE4P %n" sym;
+          let res = mk_floor srk (mk_div srk (mk_sub srk i (mk_const srk (Hashtbl.find fv_to_vars sym))) (mk_int srk 4)) in
+          Log.errorf "POOP";
+          res
         | _ -> assert false
       in
 
@@ -340,37 +460,72 @@ let apply_offset_formula srk arr_var_offsets phi =
       mk_store srk a i_offset v, base_cell, merge_cells [cell; celli; cellv]
     | _ -> assert false
   in
-  fst (Formula.eval srk apply_offset_formula phi)
+  
+  let phi = fst (Formula.eval srk apply_offset_formula phi) in
+  substitute_sym
+    srk
+    (fun sym ->
+       Log.errorf "ISHERE5";
+       if Hashtbl.mem vars_to_fv sym then
+         mk_var srk (Hashtbl.find vars_to_fv sym) (typ_symbol_fo srk sym)
+       else mk_const srk sym)
+    phi
 
 let apply_offset_candidates srk fp rule_cells class_candidates =
-  let rules' = 
-    List.mapi (fun ind (hypos, constr, conc) ->
+  let map ind (conc, hypos, constr) =  
         let var_to_cell = Hashtbl.create 97 in
         BatHashtbl.iter (fun var cell -> 
+            Log.errorf "ISHERE6";
             match cell with
             | None -> BatHashtbl.add var_to_cell var (Cell(Zero))
             | Some cell -> BatHashtbl.add var_to_cell var (BatHashtbl.find class_candidates (ind, cell)))
           (BatHashtbl.find rule_cells ind);
-        let constr' = apply_offset_formula srk var_to_cell constr in
-        hypos, constr', conc)
-      fp.rules
+        let constr' = apply_offset_formula srk var_to_cell constr (conc :: hypos) in
+        conc, hypos, constr'
   in
-  fp.rules <- rules'
+  Fp.mapi_rules map fp
+
+
 
 let propose_offset_candidates_seahorn srk fp classes =
   Log.errorf "NUMBER OF CLASSES IS %n" (Hashtbl.length classes);
   let names_selected = Hashtbl.create 97 in
   let candidates = Hashtbl.create 97 in
   let param_reps = Hashtbl.create 97 in
-  List.iter (fun (hypos, _, conc) ->
+  List.iter (fun (conc, hypos, _) ->
       List.iter (fun atom ->
-          if Hashtbl.mem param_reps (rel_of_atom atom) then ()
-          else Hashtbl.add param_reps (rel_of_atom atom) (params_of_atom atom))
+          if Hashtbl.mem param_reps (Proposition.symbol_of atom) then ()
+          else Hashtbl.add param_reps (Proposition.symbol_of atom) (Proposition.names_of atom))
         (conc :: hypos))
-    fp.rules;
+    (Fp.get_rules fp);
+
   BatHashtbl.iter (fun chcvarin chcvarclass ->
-      Log.errorf "looking for rel %a and param %n"
-        (Chc.Relation.pp fp) chcvarin.rel chcvarin.param;
+      Log.errorf "error1";
+      if not (Hashtbl.mem candidates chcvarclass)
+      then Hashtbl.add candidates chcvarclass (BatHashtbl.create 97)
+      else ();
+      Log.errorf "error2";
+      Log.errorf "error3";
+      let params = Hashtbl.find param_reps chcvarin.rel in
+      Log.errorf "error4";
+      Log.errorf "ADDING FOR VAR %s param %n" (show_symbol srk chcvarclass.rel) (chcvarclass.param);
+
+      if Hashtbl.mem names_selected chcvarclass then ()
+      else (
+        try
+          let var = List.nth params (chcvarin.param - 1) in
+          Log.errorf "ATTEMPT ADD IS %s" var;
+          if BatString.starts_with var "main@%_"
+          then (
+            Hashtbl.add names_selected chcvarclass var
+          )
+          else () 
+        with _ -> ())
+    )
+    classes;
+ 
+
+  BatHashtbl.iter (fun chcvarin chcvarclass ->
       Log.errorf "error1";
       if not (Hashtbl.mem candidates chcvarclass)
       then Hashtbl.add candidates chcvarclass (BatHashtbl.create 97)
@@ -382,51 +537,42 @@ let propose_offset_candidates_seahorn srk fp classes =
         Log.errorf "error3";
         let params = Hashtbl.find param_reps chcvarin.rel in
         Log.errorf "error4";
+        Log.errorf "LOOKING FOR VAR %s param %n" (show_symbol srk chcvarin.rel) (chcvarin.param);
         if Hashtbl.mem names_selected chcvarclass then (
           Log.errorf "error5";
           let name = Hashtbl.find names_selected chcvarclass in
           Log.error "error6 %s" name;
-          let ind, _ = BatList.findi (fun _ var -> Log.errorf "name is %s" (show_symbol srk var);(show_symbol srk var) = name) params in
+          let ind, _ = BatList.findi (fun _ var -> Log.errorf "name is %s" var;var = name) params in
           Log.errorf "error7";
           Hashtbl.add (Hashtbl.find candidates chcvarclass) chcvarin.rel ind
         )
-        else (
-          let var, ind = 
-            Log.errorf "error4";
-            BatList.hd 
-              (BatList.rev ((BatList.filteri_map (fun ind var ->
-                   Log.errorf "Checking var %s for rel %a param %n"
-                     (show_symbol srk var) (Chc.Relation.pp fp) chcvarin.rel chcvarin.param;
-                   if BatString.starts_with (show_symbol srk var) 
-                       "main@%_" && ind <= chcvarin.param 
-                   then(
-                     Log.errorf "GOOD";
-                     Some (var, ind))
-                   else None)
-                   params)))
-          in
-          Log.errorf "assigning %s for rel %a param %n"
-            (show_symbol srk var) (Chc.Relation.pp fp) chcvarclass.rel chcvarclass.param;
-          Hashtbl.add names_selected chcvarclass (show_symbol srk var);
-          Hashtbl.add (Hashtbl.find candidates chcvarclass) chcvarin.rel ind
-        )
+        else ( failwith "NAME NOT ADDED")
       ))
   classes;
   candidates
 
 
-let derive_offset_for_each_rule fp candidates =
+let derive_offset_for_each_rule srk fp candidates =
   let offset_for_each_rule = BatHashtbl.create 97 in
-  List.iteri (fun ind (hypos, _, conc) ->
-        List.iter (fun atom ->
-            BatHashtbl.iter (fun chcvar rel_ints ->
-                if BatHashtbl.mem rel_ints (rel_of_atom atom) then
+  List.iteri (fun ind (conc, hypos, constr) ->
+      let param_counter = ref 0 in
+      Log.errorf "RULE IS %a" (Chc.Fp.pp_rule srk) (conc, hypos, constr);
+      List.iter (fun atom ->
+          BatHashtbl.iter (fun chcvar rel_ints ->
+                if BatHashtbl.mem rel_ints (Proposition.symbol_of atom) then (
+                  Log.errorf "Usin param %n of atom with %n params so it is %n"
+                    (BatHashtbl.find rel_ints (Proposition.symbol_of atom))
+                    (List.length (Proposition.typ_of_params srk atom))
+                    (!param_counter + (BatHashtbl.find rel_ints (Proposition.symbol_of atom)));
                   BatHashtbl.add offset_for_each_rule (ind, chcvar) 
-                    (Cell (Symbol (List.nth (params_of_atom atom) (BatHashtbl.find rel_ints (rel_of_atom atom)))))
-                else ())
-              candidates)
+                    (Cell (Symbol (!param_counter + (BatHashtbl.find rel_ints (Proposition.symbol_of atom))))))
+                else ()
+            )
+            candidates;
+            param_counter := !param_counter + List.length (Proposition.typ_of_params srk atom)
+        )
           (conc :: hypos))
-    fp.rules;
+    (Fp.get_rules fp);
   offset_for_each_rule
 
 
@@ -667,7 +813,7 @@ module OldPmfa = struct
   Formula.eval srk alg phi
 
  let unbooleanize srk phi =
-      let phi, _ = skolemize srk phi in 
+      let phi, _ = skolemize srk 0 phi in 
       let symbols = symbols phi in
       let map = Hashtbl.create 97 in
       Symbol.Set.iter (fun ele ->
@@ -715,10 +861,6 @@ module OldPmfa = struct
       let exists = TransitionFormula.exists tf in
       let tr_symbols = TransitionFormula.symbols tf in
       let flag = ref false in
-      let tr_symbols = match typ_symbol srk (fst (List.hd tr_symbols)) with
-        | `TyBool -> flag := true; List.tl tr_symbols
-        | _ -> tr_symbols 
-      in
       to_file srk (T.formula tf) "/Users/jakesilverman/Documents/duet/duet/abstractphi.smt2";
       let phi = eliminate_stores srk (T.formula tf) in
       to_file srk phi "/Users/jakesilverman/Documents/duet/duet/elimstores.smt2";
@@ -883,7 +1025,7 @@ module OldPmfa = struct
             to_file srk final "/Users/jakesilverman/Documents/duet/duet/final_quant.smt2";
             final
             
-          | Dec _ -> assert false 
+          | Dec _ -> mk_true srk
             (*Log.errorf "COMPUTING Dec LTS FOR %s %s\n" (show_symbol srk x) (show_symbol srk x');
             let x = mk_mul srk [mk_int srk 4; mk_const srk x] in
             let x' = mk_mul srk [mk_int srk 4; mk_const srk x'] in

@@ -49,6 +49,7 @@ let typ_symbol_fo srk sym =
   | `TyReal -> `TyReal
   | `TyBool -> `TyBool
   | `TyArr -> `TyArr
+  (* TODO: arrays *)
   | _ -> assert false
 
 module Fp = struct
@@ -94,103 +95,119 @@ module Fp = struct
 
   let add_query fp query = { fp with queries = Symbol.Set.add query fp.queries} 
 
+  let map_rules map fp = { fp with rules = List.map map fp.rules} 
+  let mapi_rules map fp = { fp with rules = List.mapi map fp.rules} 
+
+
+  let prop_symbols fp =
+    BatList.fold_left (fun props (conc, hypo, _) ->
+        BatList.fold_left (fun props prop ->
+            Symbol.Set.add prop.symbol props)
+          props
+          (conc ::hypo))
+      fp.queries
+      fp.rules
+
+  let get_rules fp = fp.rules
+
+  type 'a edge = One | Zero | Edge of (string * typ_fo) list * (string * typ_fo) list * 'a formula
+  let zero = Zero 
+  let one = One 
+
   let goal_vert = -2 
   let start_vert = -1
+  let add srk x y =
+    match x, y with
+    | One, _
+    | _, One -> One
+    | Zero, e -> e
+    | e, Zero -> e
+    | Edge (fvc, fvh, phix), Edge (_, _, phiy) -> 
+      Edge (fvc, fvh, mk_or srk [phix; phiy])
+
+  let mul srk x y =
+    match x, y with
+    | One, e -> e
+    | e, One -> e
+    | Zero, _
+    | _, Zero -> Zero
+    | Edge (_, p_hx, phix), Edge (p_cy, p_hy, phiy) -> 
+      let num_p_cy, num_p_hy = List.length p_cy, List.length p_hy in
+      let phiy' = 
+        substitute
+          srk
+          (fun (ind, typ) ->
+             if ind < num_p_cy
+             then mk_var srk (ind + num_p_hy) typ
+             else mk_var srk (ind - num_p_cy) typ)
+          phiy
+      in
+      let phix' =
+        substitute
+          srk
+          (fun (ind, typ) ->
+             if ind < num_p_hy 
+             then mk_var srk ind typ
+             else mk_var srk (ind + num_p_cy) typ)
+          phix
+      in
+      let phi' =
+        List.fold_left (fun phi (name, typ) ->
+            mk_exists srk ~name typ phi)
+          (mk_and srk [phix'; phiy'])
+          p_hy
+      in
+      Edge (p_cy, p_hx, phi')
+
+  let star srk pd x =
+    match x with
+    | Zero -> Zero
+    | One -> One
+    | Edge (p_c, p_h, phi) ->
+      let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
+      let var_to_sym = Hashtbl.create 97 in
+      let num_trs = List.length p_c in
+      let trs = 
+        BatList.map2i (fun ind (name1, typ1) (name2, typ2) ->
+            let s1 = mk_symbol srk ~name:name1 (typ1 :> typ) in
+            let s2 = mk_symbol srk ~name:(name2) (typ2 :> typ) in
+            Hashtbl.add var_to_sym s1 (num_trs + ind);
+            Hashtbl.add var_to_sym s2 ind;
+            s1, s2)
+          p_h
+          p_c
+      in
+      let phi =
+        substitute
+          srk
+          (fun (ind, _) ->
+             if ind < List.length p_c
+             then mk_const srk (snd (List.nth trs ind))
+             else mk_const srk (fst (List.nth trs (ind - List.length p_c))))
+          phi
+      in
+      let module PD = (val pd : Iteration.PreDomain) in
+      let lc = mk_symbol srk `TyInt in
+      let tf = TransitionFormula.make ~exists phi trs in
+      let phi' = PD.exp srk trs (mk_const srk lc) (PD.abstract srk tf) in
+      let phi' =
+        substitute_sym 
+          srk
+          (fun sym ->
+             match BatHashtbl.find_option var_to_sym sym with
+             | Some i -> mk_var srk i (typ_symbol_fo srk sym)
+             | None -> mk_const srk sym)
+          phi'
+      in
+      (* TODO: try to remove the new quants via miniscoping/del procedure *)
+      Edge (p_c, p_h, phi') 
+
 
   let linchc_to_weighted_graph srk (fp : 'a t) pd =
     let open WeightedGraph in
     (* The edges of the graph are of the form 
      * [(conc params, hypo params, constr)]*) 
-    let alg = 
-      let is_one (_, _, phi) = Formula.equal phi (mk_true srk) in
-      let is_zero (_, _, phi) = Formula.equal phi (mk_false srk) in
-      let zero = [], [], mk_false srk in
-      let one = [], [], mk_true srk in
-      let add x y =
-        if is_zero x then y else if is_zero y then x
-        else (
-          let (fvc, fvh, phix) = x in
-          let (_, _, phiy) = y in
-          fvc, fvh, mk_or srk [phix; phiy])
-      in
-      let mul x y =
-        let (_, p_hx, phix) = x in
-        let (p_cy, p_hy, phiy) = y in
-        if is_one x then y else if is_one y then x
-        else (
-          let num_p_cy, num_p_hy = List.length p_cy, List.length p_hy in
-          let phiy' = 
-            substitute
-              srk
-              (fun (ind, typ) ->
-                 if ind < num_p_cy
-                 then mk_var srk (ind + num_p_hy) typ
-                 else mk_var srk (ind - num_p_cy) typ)
-              phiy
-          in
-          let phix' =
-            substitute
-              srk
-              (fun (ind, typ) ->
-                 if ind < num_p_hy 
-                 then mk_var srk ind typ
-                 else mk_var srk (ind + num_p_cy) typ)
-              phix
-          in
-          let phi' =
-            List.fold_left (fun phi (name, typ) ->
-                mk_exists srk ~name typ phi)
-              (mk_and srk [phix'; phiy'])
-              p_hy
-         in
-          Log.errorf "MUL4\n";
-          (*let phi' = Quantifier.miniscope srk phi' in
-          let phi' = Quantifier.eq_guided_qe srk phi' in*)
-          (* TODO: try to remove the new quants via miniscoping/del procedure *)
-          p_cy, p_hx, phi')
-      in
-      let star (p_c, p_h, phi) =
-        (* TODO: can use better data types more efficiently here *)
-        let skolems = symbols phi in
-        let exists sym = not (Symbol.Set.mem sym skolems) in 
-        let trs = 
-          List.map (fun (name, typ) ->
-              let s1 = mk_symbol srk ~name (typ :> typ) in
-              let s2 = mk_symbol srk ~name:(name^"'") (typ :> typ) in
-              s1, s2)
-            p_c
-        in
-        let hypo_vars, conc_vars = List.split trs in
-        let vars = conc_vars @ hypo_vars in
-        let phi =
-          substitute
-            srk
-            (fun (ind, _) ->
-               if ind < List.length p_c
-               then mk_const srk (snd (List.nth trs ind))
-               else mk_const srk (fst (List.nth trs (ind - List.length p_c))))
-            phi
-        in
-        let module PD = (val pd : Iteration.PreDomain) in
-        let lc = mk_symbol srk `TyInt in
-        let tf = TransitionFormula.make ~exists phi trs in
-        let phi' = PD.exp srk trs (mk_const srk lc) (PD.abstract srk tf) in
-        let trs_flat = List.flatten (List.map (fun (x, x') -> [x; x']) trs) in
-        let phi' = mk_exists_consts srk (fun s -> Symbol.Set.mem s skolems || List.mem s trs_flat) phi' in
-        let phi' =
-          substitute_sym 
-            srk
-            (fun sym ->
-              match BatList.index_of sym vars with
-              | Some i -> mk_var srk i (typ_symbol_fo srk sym)
-              | None -> mk_const srk sym)
-            phi'
-        in
-       (* TODO: try to remove the new quants via miniscoping/del procedure *)
-        p_c, p_h, phi' 
-      in
-      {mul; add; star; zero; one}
-    in
+    let alg = {mul=mul srk; add=add srk; star=star srk pd; zero; one} in
     let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
     let wg = WeightedGraph.add_vertex wg goal_vert in
     let prop_symbols =
@@ -216,20 +233,21 @@ module Fp = struct
              WeightedGraph.add_edge 
                wg 
                start_vert
-               (BatList.combine conc.names (Proposition.typ_of_params srk conc), [], constr)
+               (Edge (BatList.combine conc.names (Proposition.typ_of_params srk conc), [], constr))
                (int_of_symbol conc.symbol)
            | [hd] -> 
              WeightedGraph.add_edge 
                wg
                (int_of_symbol hd.symbol)
-               (BatList.combine conc.names (Proposition.typ_of_params srk conc),
+               (Edge (BatList.combine conc.names (Proposition.typ_of_params srk conc),
                 BatList.combine conc.names (Proposition.typ_of_params srk hd),
-                constr)
+                constr))
                (int_of_symbol conc.symbol)
            | _ -> failwith "CHC is non-linear")
         wg
         fp.rules
     in
+    (*TODO: probably shouldn't be alg.one *)
     let wg =
       Symbol.Set.fold (fun sym wg ->
           WeightedGraph.add_edge wg (int_of_symbol sym) alg.one goal_vert)
@@ -356,8 +374,10 @@ module Fp = struct
         let wg = linchc_to_weighted_graph srk sub_fp pd in
         let sub_soln = 
           (fun rel -> 
-             let _, _, phi = WG.path_weight wg start_vert rel in 
-             phi) 
+             match WG.path_weight wg start_vert rel with
+             | One -> mk_true srk
+             | Zero -> mk_false srk
+             | Edge (_, _, phi) -> phi) 
         in
         Symbol.Set.iter 
           (fun rel -> Hashtbl.add solution (int_of_symbol rel) (sub_soln (int_of_symbol rel))) 
@@ -476,7 +496,7 @@ module ChcSrkZ3 = struct
       let fv_order = Hashtbl.create 97 in
       let cnter = ref (-1) in
       let phis = ref [] in
-      List.map (fun (symbol, args) ->
+      let arg = List.map (fun (symbol, args) ->
           {symbol;
            names = 
              List.mapi (fun ind_arg arg ->
@@ -504,16 +524,20 @@ module ChcSrkZ3 = struct
                      let i2 = Hashtbl.find fv_order i in
                      phis := mk_eq_by_typ (typ :> typ_fo) !cnter i2 :: !phis)
                    else (Hashtbl.add fv_order i !cnter);
+                   Log.errorf "PHIS ADDED TOOVA %a" (Formula.pp srk) (mk_and srk !phis);
                    fst (List.nth qpf i)
                  | `Proposition (`Var i) ->
                    if Hashtbl.mem fv_order i then (
                      let i2 = Hashtbl.find fv_order i in
                      phis := mk_eq_by_typ `TyBool !cnter i2 :: !phis)
                    else (Hashtbl.add fv_order i !cnter);
+                   Log.errorf "PHIS ADDED TOOPR %a" (Formula.pp srk) (mk_and srk !phis);
                    fst (List.nth qpf i)
                  | _ -> assert false)
                args})
-        props,
+        props
+      in
+      arg,
       fv_order,
       !phis
     in
@@ -522,6 +546,7 @@ module ChcSrkZ3 = struct
       BatHashtbl.fold (fun ind _ (counter, qinfos) ->
           if Hashtbl.mem prop_fv_map ind then (counter, qinfos)
           else (
+            Log.errorf "ADDING IND %n" ind;
             Hashtbl.add fv_map ind counter;
             (counter + 1, List.nth qpf ind :: qinfos)))
         (free_vars constr)
@@ -530,11 +555,13 @@ module ChcSrkZ3 = struct
     in
     let parse_rule rule =
       let rule = formula_of_z3 srk ~sym_of_decl rule in
+      Log.errorf "INIT RULE IS %a" (Formula.pp srk) rule;
       let qnf_rule = Formula.prenex srk rule in
       let qpf_rev, matrix = detach_qpf qnf_rule in
       let qpf = List.rev qpf_rev in
       let hypo, conc_prop = detach_conc matrix in
       let hypo_props, constr = detach_hypo_props hypo in
+      Log.errorf "CONSTR IS %a" (Formula.pp srk) constr;
       let props, prop_fvs, phis = parse_props (conc_prop :: hypo_props) qpf in
       (* The constr cannot have any free vars other than those used as an
        * argument to a proposition. For the remaining fvs, we will bound them
@@ -551,13 +578,15 @@ module ChcSrkZ3 = struct
              else mk_var srk (Hashtbl.find non_prop_fv_map ind) typ)
           constr
       in
-      let constr = mk_and srk (constr :: phis) in
+      Log.errorf "NEW CONSTR IS %a" (Formula.pp srk) constr;
       let constr =
         BatList.fold_left (fun constr (name, typ) ->
             mk_exists srk ~name typ constr)
           constr
           (List.rev qinfos)
       in
+      let constr = mk_and srk (constr :: phis) in
+      Log.errorf "FINAL CONSTR IS %a" (Formula.pp srk) constr;
       List.hd props, List.tl props, constr
     in
     let parse_query query = sym_of_decl (Z3.Expr.get_func_decl query) in
