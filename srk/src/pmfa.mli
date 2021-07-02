@@ -4,8 +4,9 @@ open Chc
 
 type arrvar = Sym of symbol | Fv of int
 
-val skolemize : 'a context -> int -> 'a formula -> 'a formula * Symbol.Set.t
+val skolemize : 'a context -> 'a formula -> 'a formula
 val skolemize_chc : 'a context -> 'a fp -> 'a fp
+val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 val offset_partitioning : 'a context -> 'a formula -> (arrvar, arrvar BatUref.uref) Hashtbl.t
 type chcvar = { rel : symbol; param : int} 
 
@@ -25,11 +26,11 @@ val apply_offset_candidates :
   'a fp
 val propose_offset_candidates_seahorn : 
   'a context ->
-  'a fp -> (chcvar, chcvar) Hashtbl.t -> (chcvar, (symbol, int) Hashtbl.t) Hashtbl.t
+  'a fp -> (chcvar, chcvar) Hashtbl.t -> (chcvar, (symbol, int option) Hashtbl.t) Hashtbl.t
 val derive_offset_for_each_rule : 
   'a context ->
   'a fp ->
-  (chcvar, (symbol, int) Hashtbl.t) Hashtbl.t ->
+  (chcvar, (symbol, int option) Hashtbl.t) Hashtbl.t ->
   (int * chcvar, offset) Hashtbl.t
 
 
