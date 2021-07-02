@@ -157,6 +157,7 @@ module Fp = struct
           (mk_and srk [phix'; phiy'])
           p_hy
       in
+      let phi' = Quantifier.eq_guided_qe srk phi' in
       Edge (p_cy, p_hx, phi')
 
   let star srk pd x =
@@ -229,18 +230,20 @@ module Fp = struct
       List.fold_left
         (fun wg (conc, hypo_props, constr) ->
            match hypo_props with
-           | [] -> 
+           | [] ->
+             Log.errorf "ERROR1";
              WeightedGraph.add_edge 
                wg 
                start_vert
                (Edge (BatList.combine conc.names (Proposition.typ_of_params srk conc), [], constr))
                (int_of_symbol conc.symbol)
            | [hd] -> 
+             Log.errorf "ERROR2";
              WeightedGraph.add_edge 
                wg
                (int_of_symbol hd.symbol)
                (Edge (BatList.combine conc.names (Proposition.typ_of_params srk conc),
-                BatList.combine conc.names (Proposition.typ_of_params srk hd),
+                BatList.combine hd.names (Proposition.typ_of_params srk hd),
                 constr))
                (int_of_symbol conc.symbol)
            | _ -> failwith "CHC is non-linear")
@@ -524,14 +527,12 @@ module ChcSrkZ3 = struct
                      let i2 = Hashtbl.find fv_order i in
                      phis := mk_eq_by_typ (typ :> typ_fo) !cnter i2 :: !phis)
                    else (Hashtbl.add fv_order i !cnter);
-                   Log.errorf "PHIS ADDED TOOVA %a" (Formula.pp srk) (mk_and srk !phis);
                    fst (List.nth qpf i)
                  | `Proposition (`Var i) ->
                    if Hashtbl.mem fv_order i then (
                      let i2 = Hashtbl.find fv_order i in
                      phis := mk_eq_by_typ `TyBool !cnter i2 :: !phis)
                    else (Hashtbl.add fv_order i !cnter);
-                   Log.errorf "PHIS ADDED TOOPR %a" (Formula.pp srk) (mk_and srk !phis);
                    fst (List.nth qpf i)
                  | _ -> assert false)
                args})
@@ -546,7 +547,6 @@ module ChcSrkZ3 = struct
       BatHashtbl.fold (fun ind _ (counter, qinfos) ->
           if Hashtbl.mem prop_fv_map ind then (counter, qinfos)
           else (
-            Log.errorf "ADDING IND %n" ind;
             Hashtbl.add fv_map ind counter;
             (counter + 1, List.nth qpf ind :: qinfos)))
         (free_vars constr)
@@ -555,13 +555,11 @@ module ChcSrkZ3 = struct
     in
     let parse_rule rule =
       let rule = formula_of_z3 srk ~sym_of_decl rule in
-      Log.errorf "INIT RULE IS %a" (Formula.pp srk) rule;
       let qnf_rule = Formula.prenex srk rule in
       let qpf_rev, matrix = detach_qpf qnf_rule in
       let qpf = List.rev qpf_rev in
       let hypo, conc_prop = detach_conc matrix in
       let hypo_props, constr = detach_hypo_props hypo in
-      Log.errorf "CONSTR IS %a" (Formula.pp srk) constr;
       let props, prop_fvs, phis = parse_props (conc_prop :: hypo_props) qpf in
       (* The constr cannot have any free vars other than those used as an
        * argument to a proposition. For the remaining fvs, we will bound them
@@ -578,7 +576,6 @@ module ChcSrkZ3 = struct
              else mk_var srk (Hashtbl.find non_prop_fv_map ind) typ)
           constr
       in
-      Log.errorf "NEW CONSTR IS %a" (Formula.pp srk) constr;
       let constr =
         BatList.fold_left (fun constr (name, typ) ->
             mk_exists srk ~name typ constr)
@@ -586,7 +583,6 @@ module ChcSrkZ3 = struct
           (List.rev qinfos)
       in
       let constr = mk_and srk (constr :: phis) in
-      Log.errorf "FINAL CONSTR IS %a" (Formula.pp srk) constr;
       List.hd props, List.tl props, constr
     in
     let parse_query query = sym_of_decl (Z3.Expr.get_func_decl query) in
@@ -597,7 +593,9 @@ module ChcSrkZ3 = struct
   let parse_file ?(ctx=Z3.mk_context []) srk filename =
     let z3 = ctx in
     let z3fp = Z3.Fixedpoint.mk_fixedpoint z3 in
+    Log.errorf "PARSING STARTED";
     let z3queries = Z3.Fixedpoint.parse_file z3fp filename in
+    Log.errorf "PARSING COMPLETE";
     parse_z3fp ~z3queries srk z3fp
 
   let parse_string ?(ctx=Z3.mk_context []) srk str =

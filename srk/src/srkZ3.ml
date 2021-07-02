@@ -72,6 +72,7 @@ let rec eval alg ast =
       | (OP_SUB, [x;y]) -> alg (`Add [x; alg (`Unop (`Neg, y))])
       | (OP_UMINUS, [x]) -> alg (`Unop (`Neg, x))
       | (OP_MOD, [x;y]) -> alg (`Binop (`Mod, x, y))
+      | (OP_REM, [x; y]) -> alg (`Add [x; alg (`Unop (`Neg, alg (`Mul [y; alg (`Unop (`Floor, alg (`Binop (`Div, x, y))))])))])
       | (OP_IDIV, [x;y]) -> alg (`Unop (`Floor, alg (`Binop (`Div, x, y))))
       | (OP_DIV, [x;y]) -> alg (`Binop (`Div, x, y))
       | (OP_TO_REAL, [x]) -> x
@@ -84,6 +85,7 @@ let rec eval alg ast =
       | (OP_FALSE, []) -> alg `Fls
       | (OP_AND, args) -> alg (`And args)
       | (OP_OR, args) -> alg (`Or args)
+      | (OP_XOR, [x; y]) -> alg (`Or [alg (`And [x; alg (`Not y)]); alg (`And [x; alg (`Not y)])]) 
       | (OP_IMPLIES, [phi;psi]) -> alg (`Or [alg (`Not phi); psi])
       | (OP_IFF, [phi;psi]) ->
         alg (`Or [alg (`And [phi; psi]);
