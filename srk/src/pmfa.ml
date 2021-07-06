@@ -54,8 +54,8 @@ let skolemize_chc srk fp =
       conc, hypo, skolemize srk constr) 
     fp
 
+
 let remove_skol_consts srk phi =
-  Log.errorf "phi is %a" (Formula.pp srk) phi;
   let alg = function
     | `Tru -> []
     | `Fls -> []
@@ -1157,6 +1157,8 @@ module OldPmfa = struct
               Abstract.abstract srk polka phi2
               |> SrkApron.formula_of_property
             in
+            Log.errorf "hull is %a" (Formula.pp srk) convexhull;
+            let convexhull = phi2 in
             let iter_obj3 = Iter.abstract srk tr3 in
             let iter_proj3 = Iter.exp srk trs (mk_const srk exp2term) iter_obj3 in
             let iter_proj3 = mk_and srk [iter_proj3; mk_not srk (mk_leq srk x j); mk_not srk (mk_leq srk x' j)] in

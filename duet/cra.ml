@@ -1129,9 +1129,8 @@ let array_analyze file =
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
   Log.errorf "PARSED";
   let fp = Pmfa.skolemize_chc srk fp in
-  let fp = Pmfa.remove_skol_consts_chc srk fp in
+  (*let fp = Pmfa.remove_skol_consts_chc srk fp in*)
   Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
-  assert (2 = 1);
   Log.errorf "SKOLEMIZED";
   let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
   Log.errorf "offset";
@@ -1143,6 +1142,7 @@ let array_analyze file =
   let fp = Pmfa.apply_offset_candidates srk fp rules_classes rule_classes2 in
   Log.errorf "APPLIED";
   (*Log.errorf "applied and new is %a" (Chc.Fp.pp srk) fp;*)
+  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp; 
   let phi = Chc.Fp.query_vc_condition srk fp ad in
   Log.errorf "VC FOUND";
   Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDINIT.smt2"; 
