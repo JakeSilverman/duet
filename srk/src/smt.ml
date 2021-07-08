@@ -34,9 +34,9 @@ let equiv srk phi psi =
                mk_and srk [mk_not srk phi; psi]]
   in
   match is_sat srk equiv_formula with
-  | `Sat -> `No
-  | `Unsat -> `Yes
-  | `Unknown -> `Unknown
+  | `Sat -> Log.errorf "NOOO"; `No
+  | `Unsat -> Log.errorf "YESSS"; `Yes
+  | `Unknown -> Log.errorf "UNKNNOWNN"; `Unknown
 
 let affine_interpretation srk interp phi =
   (* Replace each function's interpretation f(x1,...,xn) = body with

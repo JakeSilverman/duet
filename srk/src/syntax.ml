@@ -1208,21 +1208,37 @@ module Formula = struct
     | Node (App _, _, `TyReal) -> invalid_arg "jek"
     | _ -> invalid_arg "destruct: not a formula"
 
-  let construct _srk open_formula = match open_formula with
-    | `Tru -> mk_true _srk
-    | `Fls -> mk_false _srk
-    | `And conjuncts -> mk_and _srk conjuncts
-    | `Or disjuncts -> mk_or _srk disjuncts
-    | `Not phi -> mk_not _srk phi
-    | `Quantify (`Exists, name, typ, phi) -> mk_exists _srk ~name typ phi
-    | `Quantify (`Forall, name, typ, phi) -> mk_forall _srk ~name typ phi
-    | `Atom (`Arith (`Eq, s, t)) -> mk_eq _srk s t
-    | `Atom (`Arith (`Leq, s, t)) -> mk_leq _srk s t
-    | `Atom (`Arith (`Lt, s, t)) -> mk_lt _srk s t
-    | `Atom (`ArrEq (s, t)) -> mk_arr_eq _srk s t
-    | `Proposition (`Var v) -> mk_var _srk v `TyBool
-    | `Proposition (`App (f, args)) -> mk_app _srk f args
-    | `Ite (cond, bthen, belse) -> mk_ite _srk cond bthen belse
+  let map_construct srk map open_formula = match open_formula with
+    | `Tru -> mk_true srk
+    | `Fls -> mk_false srk
+    | `And conjuncts -> mk_and srk (List.map map conjuncts)
+    | `Or disjuncts -> mk_or srk (List.map map disjuncts)
+    | `Not phi -> mk_not srk (map phi)
+    | `Quantify (`Exists, name, typ, phi) -> mk_exists srk ~name typ (map phi)
+    | `Quantify (`Forall, name, typ, phi) -> mk_forall srk ~name typ (map phi)
+    | `Atom (`Arith (`Eq, s, t)) -> mk_eq srk s t
+    | `Atom (`Arith (`Leq, s, t)) -> mk_leq srk s t
+    | `Atom (`Arith (`Lt, s, t)) -> mk_lt srk s t
+    | `Atom (`ArrEq (s, t)) -> mk_arr_eq srk s t
+    | `Proposition (`Var v) -> mk_var srk v `TyBool
+    | `Proposition (`App (f, args)) -> mk_app srk f args
+    | `Ite (cond, bthen, belse) -> mk_ite srk (map cond) (map bthen) (map belse)
+
+  let construct srk open_formula = match open_formula with
+    | `Tru -> mk_true srk
+    | `Fls -> mk_false srk
+    | `And conjuncts -> mk_and srk conjuncts
+    | `Or disjuncts -> mk_or srk disjuncts
+    | `Not phi -> mk_not srk phi
+    | `Quantify (`Exists, name, typ, phi) -> mk_exists srk ~name typ phi
+    | `Quantify (`Forall, name, typ, phi) -> mk_forall srk ~name typ phi
+    | `Atom (`Arith (`Eq, s, t)) -> mk_eq srk s t
+    | `Atom (`Arith (`Leq, s, t)) -> mk_leq srk s t
+    | `Atom (`Arith (`Lt, s, t)) -> mk_lt srk s t
+    | `Atom (`ArrEq (s, t)) -> mk_arr_eq srk s t
+    | `Proposition (`Var v) -> mk_var srk v `TyBool
+    | `Proposition (`App (f, args)) -> mk_app srk f args
+    | `Ite (cond, bthen, belse) -> mk_ite srk cond bthen belse
 
   let rec eval srk alg phi = 
       match destruct srk phi with

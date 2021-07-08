@@ -486,8 +486,9 @@ module Formula : sig
   val pp : ?env:(string Env.t) -> 'a context ->
     Format.formatter -> 'a formula -> unit
   val show : ?env:(string Env.t) -> 'a context -> 'a formula -> string
-  val destruct : 'a context -> 'a formula -> ('a formula, 'a) open_formula
+  val destruct : 'a context -> 'a formula -> ('a formula, 'a) open_formula 
   val construct : 'a context -> ('a formula, 'a) open_formula -> 'a formula
+  val map_construct : 'a context -> ('b -> 'a formula) -> ('b, 'a) open_formula -> 'a formula
   val eval : 'a context -> (('b, 'a) open_formula -> 'b) -> 'a formula -> 'b
   val eval_memo : 'a context -> (('b, 'a) open_formula -> 'b) -> 'a formula -> 
     'b

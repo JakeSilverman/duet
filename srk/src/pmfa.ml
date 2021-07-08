@@ -9,7 +9,153 @@ let typ_symbol_fo srk sym =
     | `TyBool -> `TyBool
     | `TyArr -> `TyArr
     | _ -> assert false
-  
+ 
+type 'a collapse_juncts_typ = Phi of 'a formula | Disj of 'a formula list | Conj of 'a formula list
+let collapse_juncts srk phi =
+  let phiize dumb_factor =
+    match dumb_factor with
+    | Phi phi -> phi
+    | Disj phis -> mk_or srk phis
+    | Conj phis -> mk_and srk phis
+  in
+  let alg = function
+    | `And conjs ->
+      let nested_conjs, others = 
+        BatList.partition_map (fun conj ->
+            match conj with
+            | Conj phis -> Left phis
+            | Phi phi -> Right phi
+            | Disj phis -> Right (mk_or srk phis))
+          conjs 
+      in
+      let nested_conjs = List.flatten nested_conjs in
+      Conj (nested_conjs @ others)
+    | `Or disjs ->
+      let nested_disjs, others = 
+        BatList.partition_map (fun disj ->
+            match disj with
+            | Conj phis -> Right (mk_and srk phis)
+            | Phi phi -> Right phi
+            | Disj phis -> Left phis)
+          disjs
+      in
+      let nested_disjs = List.flatten nested_disjs in
+      Disj (nested_disjs @ others)
+    | phi -> Phi (Formula.map_construct srk phiize phi)
+  in
+  phiize (Formula.eval srk alg phi)
+
+ 
+let collapse_juncts_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, collapse_juncts srk constr) 
+    fp
+
+
+
+
+type 'a dumb_factor_typ = Phi of 'a formula | Disj of 'a formula * 'a formula
+let dumb_factor srk _flip phi =
+  let phiize dumb_factor =
+    match dumb_factor with
+    | Phi phi -> phi
+    | Disj (phi1, phi2) -> mk_or srk [phi1; phi2]
+  in
+  let alg = function
+    | `And conjs ->
+      let mode disjs =
+        let term_count = BatHashtbl.create 97 in
+        List.iter (fun (disj1, disj2) ->
+            BatHashtbl.replace
+              term_count
+              disj1
+               ((BatHashtbl.find_default
+                  term_count
+                  disj1
+                  0) + 1);
+            BatHashtbl.replace
+              term_count
+              disj2
+              ((BatHashtbl.find_default
+                 term_count
+                 disj2
+                 0) + 1))
+          disjs;
+        fst 
+          (BatHashtbl.fold (fun term amnt (max_term, max_amnt) ->
+               if amnt > max_amnt then (term, amnt) else (max_term, max_amnt))
+              term_count
+              (fst (List.hd disjs), -1))
+      in
+      let phis, disjs =
+        BatList.partition_map (fun fact_typ ->
+            match fact_typ with
+            | Phi phi -> Left phi
+            | Disj (phi1, phi2) -> Right (phi1, phi2))
+          conjs
+      in
+      let rec factor_disjs disjs =
+        match disjs with
+        | [] -> []
+        | _ ->
+          let mode_term = mode disjs in
+          let disjs', disjs_w_mode_term =
+            BatList.partition_map (fun (disj1, disj2) ->
+                if disj1 = mode_term then Right disj2
+                else if disj2 = mode_term then Right disj1
+                else Left (disj1, disj2))
+              disjs
+          in
+         (mk_or srk [mode_term; mk_and srk disjs_w_mode_term]) ::
+         (factor_disjs disjs')
+      in
+      let disjs_factored = factor_disjs disjs in
+      Phi (mk_and srk (phis @ disjs_factored))
+(*
+
+
+      let disj_buckets = BatHashtbl.create 97 in
+      let phis = 
+        List.fold_left (fun (phis : 'a formula list) conj ->
+            match conj with
+            | Phi phi -> phi :: phis
+            | Disj (phi1, phi2) ->
+              Log.errorf "in DISJ and phi is %a" (Formula.pp srk) phi1;
+              Log.errorf "phis2 is %a" (Formula.pp srk) phi2;
+              let phi1, phi2 = if flip then phi1, phi2 else phi1, phi2 in
+              BatHashtbl.replace
+                disj_buckets
+                phi1
+                (phi2 ::
+                 (BatHashtbl.find_default
+                    disj_buckets
+                    phi1
+                    []));
+              phis)
+          []
+          conjs
+      in
+      Log.errorf "DONE CONSTRUCT TABLE\n\n\n";
+      let phis = 
+        BatHashtbl.fold (fun disj1 disj2s phis ->
+            if List.length disj2s > 1 then
+              (mk_or srk [disj1; mk_and srk disj2s]) :: phis
+            else (mk_or srk (disj1 :: disj2s)) :: phis)
+          disj_buckets
+          phis
+      in
+      let phi = mk_and srk phis in
+      Log.errorf "output is %a\n\n\n" (Formula.pp srk) phi;
+      Phi (mk_and srk phis)*)
+    | `Or disjs ->
+      let disjs = List.map phiize disjs in
+      begin match disjs with
+        | [dis1; dis2] -> Disj (dis1, dis2) 
+        | tl -> Phi (mk_or srk tl)
+      end
+    | phi -> Phi (Formula.map_construct srk phiize phi)
+  in
+  phiize (Formula.eval srk alg phi)
 
 (* Replaces existentially bound vars with skolem constants. *)
 let skolemize srk phi =
@@ -53,6 +199,49 @@ let skolemize_chc srk fp =
   Fp.map_rules (fun (conc, hypo, constr) -> 
       conc, hypo, skolemize srk constr) 
     fp
+
+
+let prenex_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, Formula.prenex srk constr) 
+    fp
+
+let dumb_factor_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, dumb_factor srk true constr) 
+    fp
+
+
+let rec check_q_array srk phi =
+  match Formula.destruct srk phi with
+  | `Quantify (`Exists, _, typ, phi) ->
+    if typ = `TyArr then assert false
+    else check_q_array srk phi
+  | open_phi -> Formula.construct srk open_phi
+
+let check_q_array_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, check_q_array srk constr) 
+    fp
+
+
+let eq_guided_qe srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo,
+      (Quantifier.eq_guided_qe srk 
+
+      (dumb_factor srk true 
+      (Quantifier.eq_guided_qe srk 
+        (Quantifier.miniscope srk
+           (dumb_factor srk false 
+           (     Quantifier.eq_guided_qe srk 
+                   (Quantifier.miniscope srk 
+           (
+      Quantifier.eq_guided_qe srk 
+        (Quantifier.miniscope srk 
+           (Quantifier.eq_guided_qe srk (Quantifier.miniscope srk constr)))) ))))))))
+    fp
+
 
 
 let remove_skol_consts srk phi =

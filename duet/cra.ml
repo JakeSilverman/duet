@@ -1124,10 +1124,30 @@ let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)
     (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
 
 let array_analyze file =
-  let init = time "init" in
+  (*let init = time "init" in*)
   Log.errorf "TRYING TO PARSE";
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
   Log.errorf "PARSED";
+ Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
+  
+  let fp = Pmfa.eq_guided_qe srk fp in
+ Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
+  
+  let fp = Pmfa.prenex_chc srk fp in
+  Log.errorf "PRENEX IS OVER\n\n\n\n\n\n\n";
+  let fp = Pmfa.dumb_factor_chc srk fp in
+  let fp = Pmfa.dumb_factor_chc srk fp in
+  let fp = Pmfa.eq_guided_qe srk fp in
+  let fp = Pmfa.prenex_chc srk fp in
+  Log.errorf "PRENEX IS OVER\n\n\n\n\n\n\n";
+  let fp = Pmfa.collapse_juncts_chc srk fp in 
+  let fp = Pmfa.dumb_factor_chc srk fp in
+   let fp = Pmfa.eq_guided_qe srk fp in
+  let fp = Pmfa.prenex_chc srk fp in
+  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
+  let _ = Pmfa.check_q_array_chc srk fp in
+  logf ~level:`always "Safe"
+  (*assert (1 = 2);
   let fp = Pmfa.skolemize_chc srk fp in
   (*let fp = Pmfa.remove_skol_consts_chc srk fp in*)
   Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
@@ -1198,7 +1218,7 @@ let array_analyze file =
       let final_time = time "final" in
       diff vc_cond_time final_time "final time ";
       logf ~level:`always "UnknownSAT"
-
+*)
 let _ =
   CmdLine.register_pass
     ("-cra", analyze, " Compositional recurrence analysis");

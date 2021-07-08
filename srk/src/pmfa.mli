@@ -6,6 +6,15 @@ type arrvar = Sym of symbol | Fv of int
 
 val skolemize : 'a context -> 'a formula -> 'a formula
 val skolemize_chc : 'a context -> 'a fp -> 'a fp
+val prenex_chc : 'a context -> 'a fp -> 'a fp
+val check_q_array_chc : 'a context -> 'a fp -> 'a fp
+val dumb_factor_chc : 'a context -> 'a fp -> 'a fp
+val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
+
+
+
+
+val eq_guided_qe : 'a context -> 'a fp -> 'a fp
 val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 val offset_partitioning : 'a context -> 'a formula -> (arrvar, arrvar BatUref.uref) Hashtbl.t
 type chcvar = { rel : symbol; param : int} 
