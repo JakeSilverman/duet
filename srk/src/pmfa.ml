@@ -229,17 +229,18 @@ let eq_guided_qe srk fp =
   Fp.map_rules (fun (conc, hypo, constr) -> 
       conc, hypo,
       (Quantifier.eq_guided_qe srk 
+      (Quantifier.eq_guided_qe_old srk 
 
       (dumb_factor srk true 
-      (Quantifier.eq_guided_qe srk 
+      (Quantifier.eq_guided_qe_old srk 
         (Quantifier.miniscope srk
            (dumb_factor srk false 
-           (     Quantifier.eq_guided_qe srk 
+           (     Quantifier.eq_guided_qe_old srk 
                    (Quantifier.miniscope srk 
            (
-      Quantifier.eq_guided_qe srk 
+      Quantifier.eq_guided_qe_old srk 
         (Quantifier.miniscope srk 
-           (Quantifier.eq_guided_qe srk (Quantifier.miniscope srk constr)))) ))))))))
+           (Quantifier.eq_guided_qe_old srk (Quantifier.miniscope srk constr)))) )))))))))
     fp
 
 
