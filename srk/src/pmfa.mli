@@ -9,14 +9,22 @@ val skolemize_chc : 'a context -> 'a fp -> 'a fp
 val prenex_chc : 'a context -> 'a fp -> 'a fp
 val check_q_array_chc : 'a context -> 'a fp -> 'a fp
 val dumb_factor_chc : 'a context -> 'a fp -> 'a fp
+
+val bool_factor_chc : 'a context -> 'a fp -> 'a fp
 val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
+val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
+val elim_ite_chc : 'a context -> 'a fp -> 'a fp
+
+val get_offset_cands : 'a context -> 'a formula -> unit
+
+
 
 
 
 
 val eq_guided_qe : 'a context -> 'a fp -> 'a fp
 val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
-val offset_partitioning : 'a context -> 'a formula -> (arrvar, arrvar BatUref.uref) Hashtbl.t
+val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t
 type chcvar = { rel : symbol; param : int} 
 
 
@@ -25,7 +33,7 @@ type offset = DNA | Cell of cell | Unrestricted
 
 
 val pmfa_chc_offset_partitioning : 'a context -> 'a fp -> 
-  (chcvar, chcvar) Hashtbl.t * (int, (arrvar, chcvar option) Hashtbl.t) Hashtbl.t
+  (chcvar, chcvar) Hashtbl.t * (int, (int, chcvar option) Hashtbl.t) Hashtbl.t
 (*val verify_offset_candidates : 'a context -> 'a fp -> (symbol, int) Hashtbl.t -> bool*)
 val apply_offset_candidates : 
   'a context -> 
@@ -55,13 +63,11 @@ module OldPmfa : sig
 
   val unbooleanize : 'a context -> 'a formula -> 'a formula
 
-  (*val projection : 'a context ->'a formula -> Symbol.Set.t -> 'a t*)
-
-  (** Projects array trans. formula to lia trans formula at symbolic dimension.
-      Return is tuple containing:
-        projection index sym, primed and unprimed version,
-        mapping from array symbol to its lia symbol
-        lia trans. symbols and formula *)
+  (* [projection srk tf] returns [(j, j', map, tf')] where [tf'] is a
+   * projection of the transition formula [tf] such that for any array
+   * transition relation [(a, a')] in [tf], the dynamics of [(a, a')] are
+   * projected to just their contents at symbolic index [j], captured by the
+   * transition relation [(map a, map a')] of [tf'].*) 
   val projection :  
     'a context -> 'a T.t -> symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t
 

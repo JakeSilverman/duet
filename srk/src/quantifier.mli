@@ -82,7 +82,10 @@ val miniscope : 'a context -> 'a formula -> 'a formula
  * eliminating quantifiers when possible with no backtracing.
  * Multiple consecutive runs of this function may yield new eliminations. *)
 val eq_guided_qe : 'a context -> 'a formula -> 'a formula
+val eg_simplification : 'a context -> 'a formula -> 'a formula
 val eq_guided_qe_old : 'a context -> 'a formula -> 'a formula
+val eq_guided_qe_bool_only : 'a context -> 'a formula -> 'a formula
+
 
 
 (** Similar to qe_mbp but does without conversion to prenex. Eliminates
