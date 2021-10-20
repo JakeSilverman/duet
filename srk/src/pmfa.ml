@@ -9,7 +9,493 @@ let typ_symbol_fo srk sym =
     | `TyBool -> `TyBool
     | `TyArr -> `TyArr
     | _ -> assert false
- 
+
+type chcvar = { rel : symbol; param : int} 
+
+[@@deriving ord]
+
+module CHCVar = struct
+  type t = chcvar [@@deriving ord]
+end
+
+type vars = Sym of symbol | Fv of int 
+
+[@@deriving ord]
+
+module Vars = struct
+  type t = vars [@@deriving ord]
+end
+
+module VarSet = BatSet.Make(Vars)
+
+let skolemize_offset srk phi =
+  let rec subst_existentials expr =
+    match Formula.destruct srk expr with
+    | `Quantify (`Exists, name, typ, phi) ->
+      let sym = mk_symbol srk ~name (typ :> typ) in
+      let phi' = 
+        substitute
+          srk
+          (fun (ind, typ) -> if ind = 0 then mk_const srk sym else mk_var srk ind typ)
+          phi
+      in
+      subst_existentials phi'
+    | `And conjs -> mk_and srk (List.map subst_existentials conjs)
+    | open_form -> Formula.construct srk open_form
+  in
+  subst_existentials phi
+
+let get_offset_cands srk constr =
+  let constr = skolemize_offset srk constr in
+  Log.errorf "constr is %a" (Formula.pp srk) constr;
+  let arr_tbl = Memo.memo (fun _ -> BatUref.uref VarSet.empty) in
+  let int_tbl = Memo.memo (fun int_var -> BatUref.uref int_var) in
+
+
+  let add_to_tbl auref ele = BatUref.uset auref (VarSet.add ele (BatUref.uget auref)) in 
+  let rec populate_tbls_from_arith phi =
+    match ArithTerm.destruct srk phi with
+    | `Real _
+    | `App _
+    | `Var _ -> ()
+    | `Add lst
+    | `Mul lst -> List.iter populate_tbls_from_arith lst
+    | `Binop (_, s, t) -> 
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Unop (_, s) -> populate_tbls_from_arith s
+    | `Ite _ -> assert false
+    | `Select (a, i) ->
+      let a = ArrTerm.eval srk arr_term_alg a in
+      Symbol.Set.iter (fun ele ->
+          Log.errorf "adding ele %a" (pp_symbol srk) ele;
+          add_to_tbl (arr_tbl a) (Sym ele))
+        (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols i));
+      BatHashtbl.iter (fun ind typ ->
+          if typ = `TyInt then
+            add_to_tbl (arr_tbl a) (Fv ind)
+          else ())
+        (free_vars i);
+      populate_tbls_from_arith i
+  and populate_tbls_from_phi phi =
+    match Formula.destruct srk phi with
+    | `Tru
+    | `Fls -> ()
+    | `And lst
+    | `Or lst -> List.iter populate_tbls_from_phi lst
+    | `Not phi -> populate_tbls_from_phi phi
+    | `Quantify _ -> assert false
+    | `Atom (`Arith (`Eq, s, t)) ->
+      let merge a b =
+        match a, b with
+        | None, b -> b
+        | a, None -> a
+        | Some v1, Some v2 ->
+          begin match v1, v2 with
+          | Fv ind, Sym sym -> Log.errorf "uniting %n with %a" ind (pp_symbol srk) sym
+          | Sym sym, Fv ind -> Log.errorf "uniting %n with %a" ind (pp_symbol srk) sym
+          | _ -> ()
+          end;
+          BatUref.unite (int_tbl v1) (int_tbl v2);
+          a
+      in
+      let sym_class term = 
+        Symbol.Set.fold (fun ele acc ->
+            merge acc (Some (Sym ele)))
+          (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols term))
+          None
+      in
+      let fv_class term = 
+        BatHashtbl.fold (fun ind typ acc ->
+            if typ = `TyInt
+            then merge acc (Some (Fv ind))
+            else acc)
+          (free_vars term)
+          None
+      in
+      let s_class_s, s_class_t, f_class_s, f_class_t = 
+        sym_class s, sym_class t, fv_class s, fv_class t 
+      in
+      let _ = merge s_class_s (merge s_class_t (merge f_class_s f_class_t)) in
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Atom (`Arith (_, s, t)) ->
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Atom (`ArrEq (a, b)) ->
+      let a = ArrTerm.eval srk arr_term_alg a in
+      let b = ArrTerm.eval srk arr_term_alg b in
+      BatUref.unite 
+        ~sel:(VarSet.union)
+        (arr_tbl a)
+        (arr_tbl b)
+    | `Proposition _ -> ()
+    | `Ite _ -> assert false
+  and arr_term_alg = function
+    | `App (sym, []) -> Sym sym 
+    (* prob can't ensure no array.... doub check*)
+    | `Ite _ -> assert false 
+    | `Store (arr, i, v) ->
+      Symbol.Set.iter (fun ele ->
+          add_to_tbl (arr_tbl arr) (Sym ele))
+        (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols i));
+      BatHashtbl.iter (fun ind typ ->
+          if typ = `TyInt then
+            add_to_tbl (arr_tbl arr) (Fv ind)
+          else ())
+        (free_vars i);
+      populate_tbls_from_arith i;
+      populate_tbls_from_arith v;
+      arr
+    | `App _ -> assert false
+    | `Var (i, _) -> Fv i
+  in
+  populate_tbls_from_phi constr;
+  let fvs_ints, fvs_arrs = 
+    BatHashtbl.fold (fun ind typ (fv_ints, fv_arrs) ->
+        if typ = `TyArr
+        then (fv_ints, BatSet.Int.add ind fv_arrs)
+        else if typ = `TyInt
+        then (BatSet.Int.add ind fv_ints, fv_arrs)
+        else (fv_ints, fv_arrs))
+      (free_vars constr)
+      (BatSet.Int.empty, BatSet.Int.empty)
+  in
+  BatSet.Int.iter (fun arr_fv ->
+      Log.errorf "Looking at free var %n" arr_fv;
+      let cand_classes = 
+        VarSet.fold (fun ele acc ->
+            begin match BatUref.uget (int_tbl ele) with
+              | Fv ind -> Log.errorf "ind %n is allowed" ind
+              | Sym sym  -> Log.errorf "sym %a is allowed" (pp_symbol srk) sym
+            end;
+            (BatUref.uget (int_tbl ele)) :: acc)
+          (BatUref.uget (arr_tbl (Fv arr_fv)))
+          []
+      in
+      BatSet.Int.iter (fun ind_fv ->
+          if List.mem (BatUref.uget (int_tbl (Fv ind_fv))) cand_classes
+          then Log.errorf "Fv %n is CANDIDATE" ind_fv
+          else Log.errorf "Fv %n is NOT cnadidate" ind_fv)
+        fvs_ints)
+    fvs_arrs;
+  ()
+
+
+
+
+type arrvar = Sym of symbol | Fv of int
+
+(* Not for general formula; just for those of the form we expect to be
+ * output by seahorn; requries ite elim first *)
+let offset_partitioning srk phi =
+  (* A map from arr var syms to BatUref objects. Two arr var syms belong
+   * to the same cell if their BatUref holds the same value *)
+  let class_map = BatHashtbl.create 97 in
+  let vars_to_fv = BatHashtbl.create 97 in
+  let subst = 
+    Memo.memo (fun (ind, typ) ->
+        if typ = `TyArr then (
+          (* We will compute the equiv classes over the vars introduced
+           * in this conditional and then we will transpose the result back
+           * to the fvs later *)
+          BatHashtbl.add class_map ind (BatUref.uref ind);
+          let sym = mk_symbol srk `TyArr in
+          BatHashtbl.add vars_to_fv sym ind;
+          mk_const srk sym
+        )
+        else mk_var srk ind typ)
+  in
+  let phi = 
+    substitute
+      srk
+      subst 
+      phi
+  in
+  let merge_cells cells =
+    List.fold_left (fun acc_cell cell ->
+        match acc_cell, cell with
+        | sym1, sym2 ->
+          BatUref.unite 
+            (BatHashtbl.find class_map sym1) 
+            (BatHashtbl.find class_map sym2);
+          sym1)
+      (List.hd cells)
+      cells
+  in
+  let rec arr_term_alg = function
+    | `App (sym, []) -> 
+      (* prob can't ensure no array.... doub check*)
+      (BatHashtbl.find vars_to_fv sym)
+    | `Ite _ -> assert false 
+    | `Store (arr_cell, _, _) -> arr_cell
+    | `App _
+    | `Var _ -> assert false
+  and formula_alg = function
+    | `Atom(`ArrEq (a, b)) ->
+       let cells1 = ArrTerm.eval srk arr_term_alg a in
+       let cells2 = ArrTerm.eval srk arr_term_alg b in
+       let _ = merge_cells ([cells1; cells2]) in
+       ()
+    | `Quantify (`Forall, _, _, _) -> failwith "Need to bring back old cell merging"
+    | `Ite _ -> assert false
+    | _ -> ()
+  in
+  let _ = Formula.eval srk formula_alg phi in
+  class_map
+
+
+(*two goals : link arrays in same equiv class
+ * and determine a suitable offset for each equiv class *)
+
+let determine_offsets srk fp =
+  let chcvar_to_rule_to_var = Hashtbl.create 97 in
+  let num_rules = List.length (Fp.get_rules fp) in
+  let fv_counter = ref 0 in
+  List.iteri (fun rule_ind (conc, hypo, constr) ->
+      let fvcounter = ref 0 in
+      let chcvar_tbl = Hashtbl.create 50 in
+      List.iter (fun prop ->
+          List.iteri (fun param _ ->
+              Hashtbl.add chcvar_tbl !fvcounter {rel=Proposition.symbol_of prop; param};
+              fvcounter := !fvcounter + 1)
+            (Proposition.typ_of_params srk prop))
+        (conc :: hypo);
+      let chcvar_of fv = Hashtbl.find chcvar_tbl fv in
+      let local_arr_cells = offset_partitioning srk constr in
+      get_offset_cands srk constr;
+      let arr_cell_of fv = Hashtbl.find local_arr_cells fv in
+      BatHashtbl.iter (fun local_arr local_cell ->
+          if (arr_cell_of local_arr) = (arr_cell_of (BatUref.uget local_cell))
+          then ()
+          else ())
+        local_arr_cells
+      (*List.iter (fun prop ->
+          List.iteri (fun param typ ->
+              if typ = `TyArr then (
+                let chcvar = {rel=Proposition.symbol_of prop; param} in
+
+                let local_arr_class = offset_cands_classes chcvar in
+                if BatHashtbl.mem  chcvar_class then
+
+                let rule_to_var = 
+                  if BatHashtbl.mem chcvar_to_rule_to_var chcvar
+                  then BatHashtbl.find chcvar_to_rule_to_var chcvar
+                  else (
+                    let rule_to_var = BatArray.make num_rules Zero in
+                    BatHashtbl.add chcvar_to_rule_to_var chcvar rule_to_var;
+                    rule_to_var)
+                in
+                BatArray.set rule_to_var rule_ind (offset_cands !fv_counter);)
+              else ();
+              fv_counter := !fv_counter + 1)
+            (Proposition.typ_of_params srk prop))
+        (conc :: hypo))*))
+    (Fp.get_rules fp);
+  chcvar_to_rule_to_var
+
+
+(*
+let determine_offsets srk fp =
+  let arr_chcvar_to_int_chcvar = Hashtbl.create 97 in
+  let num_rules = List.length (Fp.get_rules fp) in
+  let fv_counter = ref 0 in
+  List.iteri (fun rule_ind (conc, hypo, constr) ->
+      let offset_cands, equiv_classes = get_offset_cands constr in
+      List.iter (fun prop ->
+          List.iteri (fun param typ ->
+              if typ = `TyArr then (
+                let chcvar = {rel=Proposition.symbol_of prop; param} in
+                if 
+                let rule_to_var = 
+                  if BatHashtbl.mem chcvar_to_rule_to_var chcvar
+                  then BatHashtbl.find chcvar_to_rule_to_var chcvar
+                  else (
+                    let rule_to_var = BatArray.make num_rules Zero in
+                    BatHashtbl.add chcvar_to_rule_to_var chcvar rule_to_var;
+                    rule_to_var)
+                in
+                BatArray.set rule_to_var rule_ind (offset_cands !fv_counter);)
+              else ();
+              fv_counter := !fv_counter + 1)
+            (Proposition.typ_of_params srk prop))
+        (conc :: hypo))
+    (Fp.get_rules fp);
+  chcvar_to_rule_to_var
+*)
+
+(*
+let get_offset_cands srk constr num_conc =
+  let arrs_to_arrs = Hashtbl.create 97 in
+  let arrs_to_ints = Hashtbl.create 97 in
+  let ints_to_ints : (vars, VarSet.t) Hashtbl.t = Hashtbl.create 97 in
+  let rec populate_tbls_from_arith phi =
+    match ArithTerm.destruct srk phi with
+    | `Real _
+    | `App _
+    | `Var _ -> ()
+    | `Add lst
+    | `Mul lst -> List.iter populate_tbls_from_arith lst
+    | `Binop (_, s, t) -> 
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Unop (_, s) -> populate_tbls_from_arith s
+    | `Ite _ -> assert false
+    | `Select (a, i) ->
+      let a = ArrTerm.eval srk arr_term_alg a in
+      Symbol.Set.iter (fun ele ->
+          BatHashtbl.modify_def
+            VarSet.empty
+            a
+            (VarSet.add (Sym ele))
+            arrs_to_ints)
+        (symbols i);
+      BatHashtbl.iter (fun ind typ ->
+          if typ = `TyInt then (
+            BatHashtbl.modify_def
+              VarSet.empty
+              a
+              (VarSet.add (Fv ind))
+              arrs_to_ints)
+          else ())
+        (free_vars i)
+  and populate_tbls_from_phi phi =
+    match Formula.destruct srk phi with
+    | `Tru
+    | `Fls -> ()
+    | `And lst
+    | `Or lst -> List.iter populate_tbls_from_phi lst
+    | `Not phi -> populate_tbls_from_phi phi
+    | `Quantify _ -> assert false
+    | `Atom (`Arith (`Eq, s, t)) ->
+      Symbol.Set.iter (fun ele1 ->
+          Symbol.Set.iter (fun ele2 ->
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Sym ele1)
+                (VarSet.add (Sym ele2))
+                ints_to_ints;
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Sym ele2)
+                (VarSet.add (Sym ele1))
+                ints_to_ints;)
+            (symbols t))
+        (symbols s);
+      Symbol.Set.iter (fun ele1 ->
+          BatHashtbl.iter (fun ind2 _ ->
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Sym ele1)
+                (VarSet.add (Fv ind2))
+                ints_to_ints;
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Fv ind2)
+                (VarSet.add (Sym ele1))
+                ints_to_ints)
+            (free_vars t))
+        (symbols s);
+      Symbol.Set.iter (fun ele1 ->
+          BatHashtbl.iter (fun ind2 _ ->
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Sym ele1)
+                (VarSet.add (Fv ind2))
+                ints_to_ints;
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Fv ind2)
+                (VarSet.add (Sym ele1))
+                ints_to_ints;)
+            (free_vars s))
+        (symbols t);
+      BatHashtbl.iter (fun ind1 _ ->
+          BatHashtbl.iter (fun ind2 _ ->
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Fv ind1)
+                (VarSet.add (Fv ind2))
+                ints_to_ints;
+              BatHashtbl.modify_def
+                VarSet.empty
+                (Fv ind2)
+                (VarSet.add (Fv ind1))
+                ints_to_ints;)
+            (free_vars t))
+        (free_vars s);
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Atom (`Arith (_, s, t)) ->
+      populate_tbls_from_arith s;
+      populate_tbls_from_arith t
+    | `Atom (`ArrEq (a, b)) ->
+      let a = ArrTerm.eval srk arr_term_alg a in
+      let b = ArrTerm.eval srk arr_term_alg b in
+      BatHashtbl.modify_def VarSet.empty a (VarSet.add b) arrs_to_arrs;
+      BatHashtbl.modify_def VarSet.empty b (VarSet.add a) arrs_to_arrs
+    | `Proposition _ -> ()
+    | `Ite _ -> assert false
+  and arr_term_alg = function
+    | `App (sym, []) -> Sym sym 
+    (* prob can't ensure no array.... doub check*)
+    | `Ite _ -> assert false 
+    | `Store (arr, i, v) ->
+      Symbol.Set.iter (fun ele ->
+          BatHashtbl.modify_def
+            VarSet.empty
+            arr
+            (VarSet.add (Sym ele))
+            arrs_to_ints)
+        (symbols i);
+      BatHashtbl.iter (fun ind typ ->
+          if typ = `TyInt then (
+            BatHashtbl.modify_def
+              VarSet.empty
+              arr
+              (VarSet.add (Fv ind))
+              arrs_to_ints)
+          else ())
+        (free_vars i);
+      populate_tbls_from_arith i;
+      populate_tbls_from_arith v;
+      arr
+    | `App _ -> assert false
+    | `Var (i, _) -> Fv i
+  in
+  populate_tbls_from_phi constr;
+  ints_to_ints
+*)
+(*type offset_new = Zero | Fv of int*)
+
+(*
+let determine_offsets srk fp =
+  let chcvar_to_rule_to_var = Hashtbl.create 97 in
+  let num_rules = List.length (Fp.get_rules fp) in
+  let fv_counter = ref 0 in
+  List.iteri (fun rule_ind (conc, hypo, constr) ->
+      let offset_cands = get_offset_cands constr in
+      List.iter (fun prop ->
+          List.iteri (fun param typ ->
+              if typ = `TyArr then (
+                let chcvar = {rel=Proposition.symbol_of prop; param} in
+                let rule_to_var = 
+                  if BatHashtbl.mem chcvar_to_rule_to_var chcvar
+                  then BatHashtbl.find chcvar_to_rule_to_var chcvar
+                  else (
+                    let rule_to_var = BatArray.make num_rules Zero in
+                    BatHashtbl.add chcvar_to_rule_to_var chcvar rule_to_var;
+                    rule_to_var)
+                in
+                BatArray.set rule_to_var rule_ind (offset_cands !fv_counter);)
+              else ();
+              fv_counter := !fv_counter + 1)
+            (Proposition.typ_of_params srk prop))
+        (conc :: hypo))
+    (Fp.get_rules fp);
+  chcvar_to_rule_to_var
+*)
+
 type 'a collapse_juncts_typ = Phi of 'a formula | Disj of 'a formula list | Conj of 'a formula list
 let collapse_juncts srk phi =
   let phiize dumb_factor =
@@ -35,7 +521,8 @@ let collapse_juncts srk phi =
         BatList.partition_map (fun disj ->
             match disj with
             | Conj phis -> Right (mk_and srk phis)
-            | Phi phi -> Right phi
+            | Phi
+                (* Determines which trs in phi are monotonically increasing/decreasing *)phi -> Right phi
             | Disj phis -> Left phis)
           disjs
       in
@@ -111,42 +598,6 @@ let dumb_factor srk _flip phi =
       in
       let disjs_factored = factor_disjs disjs in
       Phi (mk_and srk (phis @ disjs_factored))
-(*
-
-
-      let disj_buckets = BatHashtbl.create 97 in
-      let phis = 
-        List.fold_left (fun (phis : 'a formula list) conj ->
-            match conj with
-            | Phi phi -> phi :: phis
-            | Disj (phi1, phi2) ->
-              Log.errorf "in DISJ and phi is %a" (Formula.pp srk) phi1;
-              Log.errorf "phis2 is %a" (Formula.pp srk) phi2;
-              let phi1, phi2 = if flip then phi1, phi2 else phi1, phi2 in
-              BatHashtbl.replace
-                disj_buckets
-                phi1
-                (phi2 ::
-                 (BatHashtbl.find_default
-                    disj_buckets
-                    phi1
-                    []));
-              phis)
-          []
-          conjs
-      in
-      Log.errorf "DONE CONSTRUCT TABLE\n\n\n";
-      let phis = 
-        BatHashtbl.fold (fun disj1 disj2s phis ->
-            if List.length disj2s > 1 then
-              (mk_or srk [disj1; mk_and srk disj2s]) :: phis
-            else (mk_or srk (disj1 :: disj2s)) :: phis)
-          disj_buckets
-          phis
-      in
-      let phi = mk_and srk phis in
-      Log.errorf "output is %a\n\n\n" (Formula.pp srk) phi;
-      Phi (mk_and srk phis)*)
     | `Or disjs ->
       let disjs = List.map phiize disjs in
       begin match disjs with
@@ -156,6 +607,114 @@ let dumb_factor srk _flip phi =
     | phi -> Phi (Formula.map_construct srk phiize phi)
   in
   phiize (Formula.eval srk alg phi)
+
+
+
+
+
+
+type 'a bool_factor_typ = Phi of (BatSet.Int.t * BatSet.Int.t * 'a formula)
+                        | Disj of (BatSet.Int.t * BatSet.Int.t * BatSet.Int.t * BatSet.Int.t * 'a formula * 'a formula)
+let bool_factor srk phi =
+  let phiize bool_factor =
+    match bool_factor with
+    | Phi (fv_tru, fv_fls, phi) -> (fv_tru, fv_fls, phi)
+    | Disj (fv_tru1, fv_fls1, fv_tru2, fv_fls2, phi1, phi2) -> 
+      BatSet.Int.inter fv_tru1 fv_tru2, BatSet.Int.inter fv_fls1 fv_fls2, mk_or srk [phi1; phi2]
+  in
+  let alg = function
+    | `And conjs ->
+      let phis, disjs =
+        BatList.partition_map (fun fact_typ ->
+            match fact_typ with
+            | Phi (_, _, phi) -> Left phi
+            | Disj (fv_tru1, fv_fls1, _, _, phi1, phi2) -> 
+              Right (fv_tru1, fv_fls1, phi1, phi2))
+          conjs
+      in
+      let rec add_to_disj_lst disj_lsts (fv_tru', fv_fls', phi1', phi2') =
+        match disj_lsts with
+        | [] -> [fv_tru', fv_fls', [phi1'], [phi2']]
+        | (fv_tru, fv_fls, phi1, phi2) :: tl ->
+          if (BatSet.Int.cardinal (BatSet.Int.inter fv_tru fv_tru') > 0 ||
+              BatSet.Int.cardinal (BatSet.Int.inter fv_fls fv_fls') > 0) then
+            (BatSet.Int.union fv_tru fv_tru', 
+            BatSet.Int.union fv_fls fv_fls', 
+            phi1' :: phi1,
+            phi2' :: phi2) :: tl
+          else
+            (fv_tru, fv_fls, phi1, phi2) :: (add_to_disj_lst tl (fv_tru', fv_fls', phi1', phi2'))
+      in
+      let disj_lst =
+        List.fold_left (fun disj_lsts disj ->
+            add_to_disj_lst disj_lsts disj)
+          []
+          disjs
+      in
+      let conjs_of_disjs = 
+        List.map (fun (_, _, phis1, phis2) ->
+            if List.length phis1 > 1 then
+              mk_or srk [mk_and srk phis1; mk_and srk phis2]
+            else mk_or srk [List.hd phis1; List.hd phis2])
+          disj_lst
+      in
+      let phi' = mk_and srk (phis @ conjs_of_disjs) in
+      let fv_trus, fv_flss =
+        List.split
+          (List.map (fun factor_typ ->
+               match factor_typ with
+               | Phi (fv_tru, fv_fls, _) -> fv_tru, fv_fls
+               | Disj (fv_tru1, fv_fls1, fv_tru2, fv_fls2, _, _) ->
+                 BatSet.Int.inter fv_tru1 fv_tru2, BatSet.Int.inter fv_fls1 fv_fls2)
+              conjs)
+      in
+      let fv_tru' = List.fold_left BatSet.Int.union BatSet.Int.empty fv_trus in
+      let fv_fls' = List.fold_left BatSet.Int.union BatSet.Int.empty fv_flss in 
+      Phi (fv_tru', fv_fls', phi')
+    | `Or disjs ->
+      let disjs = List.map phiize disjs in
+      begin match disjs with
+        | [(fv_tru1, fv_fls1, dis1); (fv_tru2, fv_fls2, dis2)] -> 
+          if BatSet.Int.cardinal (BatSet.Int.inter fv_tru1 fv_fls2) > 0 ||
+             BatSet.Int.cardinal (BatSet.Int.inter fv_fls1 fv_tru2) > 0 
+          then
+            Disj (fv_tru1, fv_fls1, fv_tru2, fv_fls2, dis1, dis2)
+          else Phi (BatSet.Int.inter fv_tru1 fv_tru2,
+                    BatSet.Int.inter fv_fls1 fv_fls2,
+                    mk_or srk [dis1; dis2])
+        | tl ->
+          let fv_tru, fv_fls, phis = 
+            List.fold_left (fun (fv_trus, fv_flss, phis) (fv_tru, fv_fls, phi) ->
+                BatSet.Int.inter fv_trus fv_tru, BatSet.Int.inter fv_flss fv_fls,
+                phi :: phis)
+              (BatSet.Int.empty, BatSet.Int.empty, [])
+              tl
+          in
+          Phi (fv_tru, fv_fls, mk_or srk phis)
+      end
+    | `Tru -> Phi (BatSet.Int.empty, BatSet.Int.empty, mk_true srk)
+    | `Fls -> Phi (BatSet.Int.empty, BatSet.Int.empty, mk_true srk)
+    | `Atom (`Arith (`Eq, s, t)) ->
+      Phi (BatSet.Int.empty, BatSet.Int.empty, mk_eq srk s t)
+    | `Atom (`Arith (`Leq, s, t)) ->
+      Phi (BatSet.Int.empty, BatSet.Int.empty, mk_leq srk s t)
+    | `Atom (`Arith (`Lt, s, t)) ->
+     Phi (BatSet.Int.empty, BatSet.Int.empty, mk_lt srk s t)
+    | `Atom(`ArrEq (a, b)) ->
+      Phi (BatSet.Int.empty, BatSet.Int.empty, mk_arr_eq srk a b)
+    | `Ite _ -> failwith "elim ite first"
+    | `Not phi ->
+      let tru, fls, phi = phiize phi in
+      Phi (fls, tru, mk_not srk phi)
+    | `Proposition (`Var i) -> Phi (BatSet.Int.singleton i, BatSet.Int.empty, mk_var srk i `TyBool)
+    | `Proposition (`App (sym, lst)) -> Phi (BatSet.Int.empty, BatSet.Int.empty, mk_app srk sym lst)
+    | `Quantify (`Exists, name, typ, phi) -> 
+      let _, _, phi = phiize phi in
+      Phi (BatSet.Int.empty, BatSet.Int.empty, mk_exists srk ~name typ phi)
+    | `Quantify _ -> failwith "no forall"
+  in
+  let _, _, phi = phiize (Formula.eval srk alg phi) in
+  phi
 
 (* Replaces existentially bound vars with skolem constants. *)
 let skolemize srk phi =
@@ -201,6 +760,12 @@ let skolemize_chc srk fp =
     fp
 
 
+
+let eq_guided_bool_only_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, Quantifier.eq_guided_qe_bool_only srk constr) 
+    fp
+
 let prenex_chc srk fp =
   Fp.map_rules (fun (conc, hypo, constr) -> 
       conc, hypo, Formula.prenex srk constr) 
@@ -212,9 +777,15 @@ let dumb_factor_chc srk fp =
     fp
 
 
+let bool_factor_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, bool_factor srk constr) 
+    fp
+
+
 let rec check_q_array srk phi =
   match Formula.destruct srk phi with
-  | `Quantify (`Exists, _, typ, phi) ->
+  | `Quantify (_, _, typ, phi) ->
     if typ = `TyArr then assert false
     else check_q_array srk phi
   | open_phi -> Formula.construct srk open_phi
@@ -223,6 +794,12 @@ let check_q_array_chc srk fp =
   Fp.map_rules (fun (conc, hypo, constr) -> 
       conc, hypo, check_q_array srk constr) 
     fp
+
+let elim_ite_chc srk fp =
+  Fp.map_rules (fun (conc, hypo, constr) -> 
+      conc, hypo, eliminate_ite srk constr) 
+    fp
+
 
 
 let eq_guided_qe srk fp =
@@ -294,140 +871,6 @@ let remove_skol_consts_chc srk fp =
     fp
 
 
-type arrvar = Sym of symbol | Fv of int
-
-(* Assumes formula has already been skolemized *)
-let offset_partitioning srk phi =
-  (* We start out by assigning each array sym in phi to its own equiv class. 
-   * We evaluate a formula bottom up and merge the equivalence of two arrays
-   * if they are related by an array equality or if they both read from the
-   * same universally quantified var.*)
-  let arrs = 
-    Symbol.Set.filter (fun sym -> (typ_symbol srk sym) = `TyArr)  (symbols phi)
-  in
-  (* A map from arr var syms to BatUref objects. Two arr var syms belong
-   * to the same cell if their BatUref holds the same value *)
-  let class_map = BatHashtbl.create 97 in
-  Symbol.Set.iter (fun sym ->
-      BatHashtbl.add class_map (Sym sym) (BatUref.uref (Sym sym)))
-    arrs;
-  let vars_to_fv = BatHashtbl.create 97 in
-  let subst = 
-    Memo.memo (fun (ind, typ) ->
-        if typ = `TyArr then (
-          BatHashtbl.add class_map (Fv ind) (BatUref.uref (Fv ind));
-          let sym = mk_symbol srk (typ :> typ) in
-          BatHashtbl.add vars_to_fv sym ind;
-          mk_const srk sym
-        )
-        else (
-          let sym = mk_symbol srk (typ :> typ) in
-          mk_const srk sym
-        ))
-  in
-
-  let phi = 
-    substitute
-      srk
-      subst phi
-  in
-  let sel a1 a2 = 
-    match a1, a2 with
-    | Fv i, _ -> Fv i
-    | _, b -> b
-  in
-  (* Merge cells merges unifies the input equivalence classes "cells"
-   * into a single cell and then returns a representative var sym for
-   * the merged cell *)
-  let merge_cells cells =
-    List.fold_left (fun acc_cell cell ->
-        match acc_cell, cell with
-        | None, v -> v
-        | v, None -> v
-        | Some sym1, Some sym2 ->
-          BatUref.unite 
-            ~sel
-            (BatHashtbl.find class_map sym1) 
-            (BatHashtbl.find class_map sym2);
-          Some sym1)
-      None
-      cells
-  in
-  (* The algebra acts over the universe (base : symbol list, cell : symbol option) 
-   * where "base" is the list of base arrays symbols (plural in case of ite)
-   * of this array term and "cell" is a representative of the cell of arrays that
-   * read from a (not bound within this term) univ quant var.*)
-  let rec arr_term_alg = function
-    | `App (sym, lst) -> if lst = [] then (
-        if BatHashtbl.mem vars_to_fv sym then
-          [Some (Fv (BatHashtbl.find vars_to_fv sym))], None
-        else [Some (Sym sym)], None)
-      else invalid_arg "offset_partitioning: Uninterp func not in pmfa"
-    | `Var _ -> invalid_arg "offset_partitioning: must skolemize first"
-    | `Ite (phi, (base1, cell1), (base2, cell2)) -> 
-      let cell_phi = Formula.eval srk formula_alg phi in
-      base1 @ base2, merge_cells [cell_phi; cell1; cell2]
-    | `Store ((base_arr, base_cell), i, v) -> 
-      let celli, _ = ArithTerm.eval srk arith_term_alg i in
-      let cellv, _ = ArithTerm.eval srk arith_term_alg v in
-      base_arr, merge_cells [base_cell; celli; cellv]
-  (* This algebra has return type (cell : symbol option, var0 : bool) where
-   * cell denotes the same thing as in arr_term_alg and var0 denotes whether a
-   * term is "var 0 `TyInt"*)
-  and arith_term_alg = function
-    | `Select (arr, (_, var0)) ->
-      let base_arrs, cell = ArrTerm.eval srk arr_term_alg arr in
-      if var0 then merge_cells (cell :: base_arrs), false
-      else cell, false
-    | `Var (i, _) -> if i = 0 then None, true else assert false
-    | `Add lst
-    | `Mul lst ->
-      let cells = List.map (fun (cell, _) -> cell) lst in
-      merge_cells cells, false
-    | `Binop (_, (cell1, _), (cell2, _)) ->
-      merge_cells [cell1; cell2], false
-    | `Unop (_, (cell, _)) -> cell, false
-    | `Real _ -> None, false
-    | `App _ -> None, false
-    | `Ite (phi, (cell1, _), (cell2, _)) ->
-      let cell_phi = Formula.eval srk formula_alg phi in
-      merge_cells [cell_phi; cell1; cell2], false
-  and formula_alg = function
-    | `Tru
-    | `Fls 
-    | `Quantify(`Forall, _, _, _) 
-    | `Proposition _ -> None
-    | `Atom (`Arith (_, x, y)) ->
-      let cellx, _ = ArithTerm.eval srk arith_term_alg x in
-      let celly, _ = ArithTerm.eval srk arith_term_alg y in
-      merge_cells [cellx; celly]
-    | `Atom(`ArrEq (a, b)) ->
-       let base_arrs1, cell1 = ArrTerm.eval srk arr_term_alg a in
-       let base_arrs2, cell2= ArrTerm.eval srk arr_term_alg b in
-       (* The univ quant var may not appear in ArrEq atoms *)
-       if Option.is_some cell1 || Option.is_some cell2
-       then invalid_arg "offset_partitioning: univ quant in ArrEq"
-       else (
-         let _ = merge_cells (base_arrs1 @ base_arrs2) in
-         None)
-    | `Atom(`IsInt _) -> assert false
-    | `And cells
-    | `Or cells -> merge_cells cells
-    | `Not cell -> cell
-    | `Ite (cell1, cell2, cell3) -> merge_cells [cell1; cell2; cell3]
-    | `Quantify (`Exists, _, _, _) -> assert false 
-  in
-  let _ = Formula.eval srk formula_alg phi in
-  class_map
-
-
-type chcvar = { rel : symbol; param : int} 
-[@@deriving ord]
-
-module CHCVar = struct
-  type t = chcvar [@@deriving ord]
-end
-
 module CHCVarSet = BatSet.Make(CHCVar)
 (* TODO: CHC with skolem consts *)
 let pmfa_chc_offset_partitioning srk fp =
@@ -456,19 +899,17 @@ let pmfa_chc_offset_partitioning srk fp =
   in
   let rules_fv_cells = BatHashtbl.create 97 in
   List.iteri (fun ind (conc, hypos, constr) ->
-      Log.errorf "constr is %a" (Formula.pp srk) constr;
       let constr_partitioning = offset_partitioning srk constr in
       let fv_to_cells = BatHashtbl.create 97 in
       let cell_reps = BatHashtbl.create 97 in
       let pcounter = ref 0 in
       List.iter (fun atom ->
           List.iteri (fun ind typ ->
-              if typ = `TyArr &&
-                 BatHashtbl.mem constr_partitioning (Fv (ind + !pcounter)) 
+              if typ = `TyArr
               then (
                 let chcvar = {rel=(Proposition.symbol_of atom);param=ind} in
                 let cell = 
-                  BatUref.uget (BatHashtbl.find constr_partitioning (Fv (ind + !pcounter))) 
+                  BatUref.uget (BatHashtbl.find constr_partitioning ((ind + !pcounter))) 
                 in
                 if BatHashtbl.mem cell_reps cell then
                   merge (BatHashtbl.find cell_reps cell) chcvar
@@ -549,6 +990,9 @@ let verify_offset_candidates srk fp candidates =
  * been locked to a specific term. *)
 type cell = Symbol of int | Zero
 type offset = DNA | Cell of cell | Unrestricted
+
+
+
 
 let apply_offset_formula srk arr_var_offsets phi props =
   let fv_to_vars = BatHashtbl.create 97 in
@@ -979,7 +1423,6 @@ let derive_offset_for_each_rule srk fp candidates =
 
 module OldPmfa = struct
   open Syntax
-  open BatPervasives
   open Iteration
   module V = Linear.QQVector
   module M = Linear.QQMatrix
@@ -988,13 +1431,6 @@ module OldPmfa = struct
   module T = TransitionFormula
   include Log.Make(struct let name = "srk.array:" end)
 
-  let time _ =
-    let t = Unix.gettimeofday () in
-    (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
-
-  let diff _ _ _ = ()
-    (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
-
   let arr_trs srk tf = 
     List.filter (fun (s, _) -> typ_symbol srk s = `TyArr) (T.symbols tf)
 
@@ -1002,16 +1438,9 @@ module OldPmfa = struct
     List.filter (fun (s, _) -> (typ_symbol srk s = `TyInt)) (T.symbols tf)
 
   let flatten syms = List.fold_left (fun acc (sym, sym') -> sym :: sym' :: acc) [] syms 
-
-  (** Subsitute tbl[sym] for sym in phi for any sym that appears in tbl *)
-  (*let tbl_subst srk phi tbl = 
-    substitute_const 
-      srk 
-      (fun sym -> BatHashtbl.find_default tbl sym (mk_const srk sym))
-      phi
-*)
+  
   (* Projects an array transition formula [tf] down to a single symbolic index
-   * [j]. The dynamics of element [j]  of array transition variables (a, a') 
+   * [j]. The dynamics of element [j] of array transition variables (a, a') 
    * are captured with the integer transition variables ([map] a, [map] a'). *)
   let projection srk tf =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
@@ -1033,7 +1462,7 @@ module OldPmfa = struct
     let integer_trs, phi = 
       List.fold_left f ((j, j') :: int_trs srk tf, T.formula tf) (arr_trs srk tf) 
     in
-    (* TODO: This quantifies symbolic constants - is that an issue? *)
+    (* TODO: Fix assumption that no symbolic constants *)
     let phi = 
       mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs)) phi 
     in
@@ -1045,17 +1474,12 @@ module OldPmfa = struct
    * thus is just a merging of the matrices under potentially many (non-nested) 
    * universal quantifiers. We factor the universal quantifier over disjunction
    * by introducing a new quantified integer sorted variable that acts a boolean
-   * and determines which disjunct is "on".*)
+   * that determines which disjunct is "on".*)
   let to_mfa srk tf =
-    let tf = TransitionFormula.map_formula (eliminate_ite srk) tf in
-    Syntax.to_file srk (TransitionFormula.formula tf) "/Users/jakesilverman/Documents/duet/duet/INPUTMFA.smt2";
- 
     (* We first subsitute in for each existentially quantified variable
-     * a new variable symbol. This allows us to focus solely on the universal
-     * quantifiers during the merging function that follows. We undo this
-     * substitution prior to the end of this function.*)
-    (* TODO: Quantifier elim via equality checking becomes much more difficult 
-     * after this step. Make sure a go at it happens prior to this step *)
+     * a new variable symbol. This results in each universal quantifier 
+     * having debruijn index 0 and makes the merging function that follows
+     * easier. We undo this substitution prior to the end of this [pmfa_to_lia].*)
     let new_vars = ref (Symbol.Set.empty) in 
     let rec subst_existentials subst_lst expr =
       match Formula.destruct srk expr with
@@ -1068,16 +1492,12 @@ module OldPmfa = struct
       | `Or disjuncts ->
         mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
       | open_form ->
-        (* TODO: make substitute more efficient *)
         substitute
           srk
           (fun (i, _) -> List.nth subst_lst i)
           (Formula.construct srk open_form)
     in
     let phi = subst_existentials [] (T.formula tf) in
-    (*TODO: If we convert to DNF first, we can likely limit ourselves to introducing
-     * only a single new quantifier. This should have payoffs when in comes to
-     * eliminating the quantifiers later on *)
     let rec merge_univ merge_eqs expr =
       match Formula.destruct srk expr with
       | `Quantify (`Forall, _, `TyInt, phi) -> mk_and srk (phi :: merge_eqs)
@@ -1091,22 +1511,21 @@ module OldPmfa = struct
       | open_form -> Formula.construct srk open_form
     in
     let body = merge_univ [] phi in
-    mk_forall srk `TyInt body, !new_vars
+    (* Note that we haven't actually associated free var 0 of body with a 
+     * universal quantifier yet. We do this at the end of [mfa_to_lia]*)
+    body, !new_vars
 
 
-  let mfa_to_lia srk phi =
-    let body = 
-      match destruct srk phi with
-      | `Quantify (`Forall, _, `TyInt, body) -> body
-      | _ -> failwith "mfa formula needs to start with leading univ quant"
-    in
-    (* We are going to introduce a bunch of new quantifiers later on. We set
-     * the univ quant var to a symbol to cut down on number of substs performed*)
+  let mfa_to_lia srk body =
+    (* We replace the univ. quant variable with a symbol to simplify the rest
+     * of [mfa_to_lia].*)
     let uq_sym = mk_symbol srk `TyInt in
     let uq_term = mk_const srk uq_sym in
     let body = 
       substitute srk (fun (i, _) -> if i = 0 then uq_term else assert false) body 
     in
+    (* [uqr_syms] is the set of symbols that will be existentially quantified
+     * in front of the universal quantifier *)
     let uqr_syms = ref Symbol.Set.empty in
     let get_arr a =
       match ArrTerm.destruct srk a with
@@ -1121,6 +1540,8 @@ module OldPmfa = struct
           uqr_syms := Symbol.Set.add sym !uqr_syms;
           sym)
     in
+    (* [nuqr_syms] is the set of symbols that will be existentially quantified
+     * at the head of the lia formula *)
     let nuqr_syms = ref Symbol.Set.empty in
     let func_consist_reqs : ('a arr_term, 'a arith_term) Hashtbl.t = Hashtbl.create 100 in
     (* Maps the term a[i] to an integer symbol where i is not the universally
@@ -1132,7 +1553,8 @@ module OldPmfa = struct
           nuqr_syms := Symbol.Set.add sym !nuqr_syms;
           mk_const srk sym)
     in
-    (* TODO: Make sure that array reads normalized for efficiency *)
+    (* TODO: Make sure that array reads normalized for efficiency; don't want
+     * seperate symbol for a[x + y] vs a[y + x]*)
     let rec termalg = function
       |  `Select (a, i) -> 
         if ArithTerm.equal i uq_term 
@@ -1170,14 +1592,13 @@ module OldPmfa = struct
 
 
   let pmfa_to_lia srk tf =
+    let tf = TransitionFormula.map_formula (eliminate_ite srk) tf in
     let mfa, new_vars = to_mfa srk tf in
     let lia = mfa_to_lia srk mfa in
     let phi = 
       mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym new_vars))) lia
     in
     T.make ~exists:(T.exists tf) phi (T.symbols tf)
-
-
 
   
  let eliminate_stores srk phi =
@@ -1201,7 +1622,7 @@ module OldPmfa = struct
         (Formula.eval srk alg phi) 
         (rewrite_store index a)
         (rewrite_store index b)
-    | _ -> assert false (*todo: func app*)
+    | _ -> assert false
   and  arith_alg = function
     | `Select (a, i) -> rewrite_store i a
     | `Ite (phi, x, y) -> mk_ite srk (Formula.eval srk alg phi) x y
@@ -1218,6 +1639,10 @@ module OldPmfa = struct
   in
   Formula.eval srk alg phi
 
+ (* Changes bool syms to int syms... when I wrote this some of the other functions
+  * in this module failed with presence of booleans. Need to check if this is still the
+  * case if not just fix this. This function messes with types of tr_symbols are that
+  * worries me*)
  let unbooleanize srk phi =
       let phi = skolemize srk phi in 
       let symbols = symbols phi in
@@ -1256,263 +1681,169 @@ module OldPmfa = struct
         proj_ind : Symbol.t;
         proj_indpost : Symbol.t;
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
-        new_trs : (Symbol.t * Symbol.t) list;
         iter_trs : (Symbol.t * Symbol.t) list;
-        projed_form : 'a formula;
-        flag : bool}
+        ground_lia : 'a formula}
 
-       (* TODO:Clean up and actually use tf*)
     let abstract srk tf =
-      let t1 = time "In abstract" in
       let exists = TransitionFormula.exists tf in
-      let tr_symbols = TransitionFormula.symbols tf in
-      let flag = ref false in
-      to_file srk (T.formula tf) "/Users/jakesilverman/Documents/duet/duet/abstractphi.smt2";
       let phi = eliminate_stores srk (T.formula tf) in
-      to_file srk phi "/Users/jakesilverman/Documents/duet/duet/elimstores.smt2";
       let phi = eliminate_ite srk phi in
       let phi = unbooleanize srk phi in
-      let tf = T.make ~exists:(T.exists tf) phi tr_symbols in
-      let proj_ind, proj_indpost, arr_map, tf_proj = projection srk tf in
-      to_file srk (T.formula tf_proj) "/Users/jakesilverman/Documents/duet/duet/projection.smt2"; 
-      let lia = pmfa_to_lia srk tf_proj in
-      to_file srk (T.formula lia) "/Users/jakesilverman/Documents/duet/duet/preqoptlia.smt2"; 
-      let phi = Quantifier.eq_guided_qe srk (T.formula lia) in
-      let new_trs = List.filter (fun a -> not (List.mem a tr_symbols)) (T.symbols lia) in
-      let pre_mbp = time "PRE MBP abstract" in
-      let ground  = Quantifier.mbp_qe_inplace srk phi in
-      let post_mbp = time "POST MBP ABSTRACT" in
-      diff pre_mbp post_mbp "Abstract mbp";
-      let ground_tf = TransitionFormula.make ~exists ground (T.symbols lia) in
+      let tf_pmfa = T.update_formula tf phi in
+      let proj_ind, proj_indpost, arr_map, tf_proj = projection srk tf_pmfa in
+      let lia_tf = pmfa_to_lia srk tf_proj in
+      let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in
+      let ground_lia = Quantifier.mbp_qe_inplace srk lia in
+      let ground_tf = TransitionFormula.make ~exists ground_lia (T.symbols lia_tf) in
       let iter_obj = Iter.abstract srk ground_tf in
-      let exit_abst = time "Exit ABSTRACT" in
-      diff t1 exit_abst "Exit Abstract";
 
-      to_file srk ground "/Users/jakesilverman/Documents/duet/duet/GROUND2.smt2";
       {iter_obj;
        proj_ind;
        proj_indpost;
        arr_map;
-       new_trs;
-       iter_trs=(T.symbols lia);
-       projed_form=ground;
-       flag=(!flag)}
+       iter_trs=(T.symbols lia_tf);
+       ground_lia;}
 
-
-    (*let equal _ _ _ _= failwith "todo 5"
-      let widen _ _ _ _= failwith "todo 6"
-      let join _ _ _ _ = failwith "todo 7"
-    *)
-
-
-    type dir_var = Inc of symbol * symbol | Dec of symbol * symbol
-    module E = ExpPolynomial
-
+    type 'a dir_var = Inc of 'a arith_term * 'a arith_term | Dec of 'a arith_term * 'a arith_term
+    
+    (* Determines which trs in phi are monotonically increasing/decreasing *)
     let directional_vars srk phi trs =
       List.flatten (
         List.filter_map (fun (x, x') ->
             let xt, xt' = mk_const srk x, mk_const srk x' in
             match Smt.entails srk phi (mk_leq srk xt xt'), 
-                  Smt.entails srk phi (mk_not srk (mk_lt srk xt xt')) with
-            | `Yes, `Yes -> None 
-              (*Some [Inc (x, x'); Dec (x, x')]*)
-            | `Yes, _ -> 
-              Some [Inc (x, x')]
-            | _, `Yes -> 
-              Some [Dec (x, x')]
-            | _ -> 
-              None)
+                  Smt.entails srk phi (mk_leq srk xt' xt) with
+            | `Yes, `Yes -> Some [Inc (xt, xt'); Dec (xt, xt')]
+            | `Yes, _ -> Some [Inc (xt, xt')]
+            | _, `Yes -> Some [Dec (xt, xt')]
+            | _ -> None)
           trs)
 
-    let something_direct srk phi trs symb_index directs lc =
+    let create_phased_exps srk phi trs symb_index directs lc =
       let exp1term = mk_symbol srk ~name:"exp1" `TyInt in
       let exp2term = mk_symbol srk ~name:"exp2" `TyInt in
-      List.map (fun direct ->
-          match direct with
+      List.map (fun direction ->
+          match direction with
           | Inc (x, x') ->
-            let x = mk_mul srk [mk_int srk 1; mk_const srk x] in
-            let x' = mk_mul srk [mk_int srk 1; mk_const srk x'] in
             let j = mk_const srk symb_index in
 
-            let phi1 = mk_and srk [phi; mk_leq srk x j; mk_leq srk x' j] in
-            to_file srk phi1 "/Users/jakesilverman/Documents/duet/duet/LTS1.smt2";
-            let tr1 = TransitionFormula.make phi1 trs in
-            let phi2 = mk_and srk [phi; mk_leq srk x j; mk_lt srk j x'] in
-            let phi3 = mk_and srk [phi; mk_not srk (mk_leq srk x j); mk_not srk (mk_leq srk x' j)] in
-            let tr3 = TransitionFormula.make phi3 trs in
-            let iter_obj1 = Iter.abstract srk tr1 in
-            let iter_proj1 = Iter.exp srk trs (mk_const srk exp1term) iter_obj1 in
-            let iter_proj1 = mk_and srk [iter_proj1; mk_leq srk x j; mk_leq srk x' j] in  
-            to_file srk iter_proj1 "/Users/jakesilverman/Documents/duet/duet/iter-proj1.smt2";
-            let polka = Polka.manager_alloc_loose () in
-
-            let convexhull =
-              Abstract.abstract srk polka phi2
-              |> SrkApron.formula_of_property
-            in
-            Log.errorf "hull is %a" (Formula.pp srk) convexhull;
-            let convexhull = phi2 in
-            let iter_obj3 = Iter.abstract srk tr3 in
-            let iter_proj3 = Iter.exp srk trs (mk_const srk exp2term) iter_obj3 in
-            let iter_proj3 = mk_and srk [iter_proj3; mk_not srk (mk_leq srk x j); mk_not srk (mk_leq srk x' j)] in
-
-
-            let pretbl = Hashtbl.create 97 in
-            let posttbl = Hashtbl.create 97 in
-            let exists = ref Symbol.Set.empty in
-            List.iter (fun (x, x') ->
-                let new_syms = 
-                  (mk_symbol srk ~name:((show_symbol srk x)^"'") `TyInt),
-                  (mk_symbol srk ~name:((show_symbol srk x')^"''") `TyInt)
-                in
-                exists := Symbol.Set.add (fst new_syms) !exists;
-                exists := Symbol.Set.add (snd new_syms) !exists;
-                Hashtbl.add pretbl x new_syms;
-                Hashtbl.add posttbl x' new_syms)
-              trs;
-            let iter1_comp =
-              substitute_const 
-                srk
-                (fun x ->
-                   if Hashtbl.mem posttbl x then
-                     mk_const srk (fst (Hashtbl.find posttbl x))
-                   else mk_const srk x)
-                iter_proj1
-            in
-            let iter3_comp =
-              substitute_const 
-                srk
-                (fun x ->
-                   if Hashtbl.mem pretbl x then
-                     mk_const srk (snd (Hashtbl.find pretbl x))
-                   else mk_const srk x)
-                iter_proj3
-            in
-            let hull_comp =
-              substitute_const 
-                srk
-                (fun x ->
-                   if Hashtbl.mem posttbl x then
-                     mk_const srk (snd (Hashtbl.find posttbl x))
-                   else if Hashtbl.mem pretbl x then
-                     mk_const srk (fst (Hashtbl.find pretbl x))
-                   else mk_const srk x)
-                convexhull
-            in
-            to_file srk iter1_comp "/Users/jakesilverman/Documents/duet/duet/iter1_comp.smt2";
-            let lccnst = mk_and srk [mk_leq srk (mk_zero srk) (mk_const srk exp1term); mk_leq srk (mk_zero srk) (mk_const srk exp2term)] in
-            let comp_formula =
-              mk_and srk [iter1_comp; iter3_comp; hull_comp;
-                          mk_eq 
+            let phase1 = 
+              T.make 
+                (mk_and srk 
+                   [Iter.exp
+                      srk 
+                      trs 
+                      (mk_const 
+                         srk 
+                         exp1term) 
+                         (Iter.abstract 
                             srk 
-                            lc 
-                            (mk_add srk [mk_const srk exp2term;
-                                         mk_const srk exp1term;
-                                         mk_int srk 1])]
+                            (T.make (mk_and srk [phi; mk_leq srk x j; mk_leq srk x' j]) trs));
+                    mk_leq srk x j; mk_leq srk x' j])
+                trs
             in
-            let bonly = mk_and srk [iter_proj3; mk_eq srk lc (mk_const srk exp2term)] in
-            let aonly =mk_and srk [iter_proj1; mk_eq srk lc (mk_const srk exp1term)] in 
-            let entire_formula = 
-              mk_or srk
-                [aonly;
-                 bonly;
-                 comp_formula]
-                 
+            let phase2 =
+              T.make
+                (mk_and srk 
+                   [Iter.exp
+                      srk 
+                      trs 
+                      (mk_const 
+                         srk 
+                         exp2term)
+                         (Iter.abstract 
+                            srk 
+                            (T.make (mk_and srk [phi; mk_lt srk j x; mk_lt srk j x']) trs));
+                    mk_lt srk j x; mk_lt srk j x'])
+                trs
             in
-            let entire_formula = mk_and srk [entire_formula; lccnst] in
-            to_file srk hull_comp "/Users/jakesilverman/Documents/duet/duet/hull.smt2";
-            to_file srk comp_formula "/Users/jakesilverman/Documents/duet/duet/hull_comp.smt2";
-            to_file srk aonly "/Users/jakesilverman/Documents/duet/duet/aonly.smt2";
-            to_file srk bonly "/Users/jakesilverman/Documents/duet/duet/bonly.smt2";
-            to_file srk entire_formula "/Users/jakesilverman/Documents/duet/duet/counter.smt2";
+            let intermediate_tr = 
+              T.make 
+                (mk_and srk [phi; mk_leq srk x j; mk_lt srk j x'])
+                trs
+            in
+
+            let phased_tr = T.mul srk (T.mul srk phase1 intermediate_tr) phase2 in
+
+            (* Adds constraints on loop counter depending on which phase(s) taken*)
+            let both_phases = 
+              T.map_formula (fun f ->
+                  mk_and 
+                    srk
+                    [mk_eq 
+                       srk 
+                       lc 
+                       (mk_add srk [mk_const srk exp2term;
+                                    mk_const srk exp1term;
+                                    mk_int srk 1]);
+                     f])
+                phased_tr
+            in
+            let phase1_only = 
+              T.map_formula (fun f ->
+                  mk_and 
+                    srk
+                    [mk_eq srk lc (mk_const srk exp1term);
+                     f])
+                phase1
+            in
+            let phase2_only = 
+              T.map_formula (fun f ->
+                  mk_and 
+                    srk
+                    [mk_eq srk lc (mk_const srk exp2term);
+                     f])
+                phase2
+            in
+                     
+
+            let phased_exp =
+              T.map_formula
+                (fun f ->
+                   mk_and
+                     srk
+                     [mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
+                      mk_leq srk (mk_zero srk) (mk_const srk exp2term);
+                      f]) 
+                (T.add srk (T.add srk both_phases phase1_only) phase2_only)
+            in
+            (* Need to quantify over newly introduce symbols *)
+            (*
             let final =
               mk_exists_consts
                 srk
                 (fun sym -> not (Symbol.Set.mem sym !exists))
                 entire_formula
-            in
-            to_file srk final "/Users/jakesilverman/Documents/duet/duet/final_quant.smt2";
-            let final = mk_exists_const srk exp1term final in
-            let final = mk_exists_const srk exp2term final in
+            in*)
+            T.map_formula 
+              (fun f ->
+                 mk_exists_const srk exp1term (mk_exists_const srk exp2term f))
+              phased_exp
 
-            final
-            
-          | Dec _ -> mk_true srk
-            (*Log.errorf "COMPUTING Dec LTS FOR %s %s\n" (show_symbol srk x) (show_symbol srk x');
-            let x = mk_mul srk [mk_int srk 4; mk_const srk x] in
-            let x' = mk_mul srk [mk_int srk 4; mk_const srk x'] in
-            let j = mk_const srk symb_index in
-
-            let phi1 = mk_and srk [phi; mk_not srk (mk_lt srk j x); mk_not srk (mk_lt srk j x')] in
-            let tr1 = TransitionFormula.make phi1 trs in
-            let lts1 = Lts.abstract_lts srk tr1 in
-            let phi2 = mk_and srk [phi; mk_not srk (mk_lt srk j x); mk_lt srk j x'] in
-            let tr2 = TransitionFormula.make phi2 trs in
-            let lts2 = Lts.abstract_lts srk tr2 in
-            let phi3 = mk_and srk [phi; mk_lt srk j x; mk_lt srk j x'] in
-            let tr3 = TransitionFormula.make phi3 trs in
-            let lts3 = Lts.abstract_lts srk tr3 in
-            Log.errorf "lts 1 is %a\n" (Lts.pp ppdim) lts1;
-            Log.errorf "lts 2 is %a\n" (Lts.pp ppdim) lts2;
-            Log.errorf "lts 3 is %a\n" (Lts.pp ppdim) lts3;
-            ()*))
+          | Dec _ -> T.make (mk_true srk) trs (* turned off for now to make testing smoother *)
+            )
         directs, exp1term, exp2term
 
-    (*let mk_all_eqs srk trs = 
-      if List.length trs = 0 then mk_true srk
-      else (
-        let snds = List.maps (fun (x, x') -> x') trs in
-        let sym = mk_const srk (List.hd snd
-      )*)
-
-    (*let mk_all_eqs srk (trs : (symbol * symbol) list) =
-      let trs = List.filter (fun (x,_) ->
-          (show_symbol srk x) != "j") trs 
-      in
-      if List.length trs = 0 then mk_true srk else
-        (
-          let snds = List.map (fun (_, x') -> mk_const srk x') trs in
-          let sym = List.hd snds in
-          mk_and srk (List.map (fun x -> mk_eq srk x sym) snds)
-        )
-*)
+    
+    
+    
     let exp srk _ lc obj =
-      let t1 = time "EXP IN" in
-      let fresh_lc = mk_symbol srk `TyInt in (*this erases relation between lc and syms in iteration... not good*)
-      let iter_proj = Iter.exp srk obj.iter_trs (mk_const srk fresh_lc) obj.iter_obj in
-      let t3 = time "EXP first" in
-      diff t1 t3 "EXP FIRST";
-      to_file srk iter_proj "/Users/jakesilverman/Documents/duet/duet/ITER_PROJ2.smt2";
-      to_file srk obj.projed_form "/Users/jakesilverman/Documents/duet/duet/PROJED2.smt2";
-      let t4 = time "EXP SPEC PROJ" in
-      diff t3 t4 "EXP SPEC PROJ";
-      (* Clean up later to make use of transitionformula obj*)
-      (*let noop_ground, _ = mbp_qe srk noop_all_but_one false in*)
-      let t5 = time "EXP SEC" in
-      diff t4 t5 "EXP SEC";
-
-      let directs = directional_vars srk obj.projed_form obj.iter_trs in
-      let directs_res, _, _ = something_direct srk obj.projed_form obj.iter_trs obj.proj_ind directs lc in
+      let directs = directional_vars srk obj.ground_lia obj.iter_trs in
+      let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc in
       let noop_eqs = 
         List.map 
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
           obj.iter_trs
       in
+      (* Redo this part to act on tfs rather than first converting to formula *)
+      let directs_res = List.map (fun f -> T.formula f) directs_res in
       let direct_res = mk_and srk directs_res in
-      (*let direct_res = mk_exists_const srk exp1 direct_res in
-      let direct_res = mk_exists_const srk exp2 direct_res in*)
-      to_file srk direct_res "/Users/jakesilverman/Documents/duet/duet/DIRECTRESPREMBP.smt2"; 
       let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
-      to_file srk direct_res "/Users/jakesilverman/Documents/duet/duet/DIRECTRES.smt2";
       let exp_res_pre = 
         mk_or 
           srk 
-          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
-           mk_and srk [(*noop_ground;*) direct_res(*;projed_right_lc*)]] 
+          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs); direct_res] 
       in
-      to_file srk exp_res_pre "/Users/jakesilverman/Documents/duet/duet/exp_phi_pre.smt2";
-      let t6 = time "EXP TH" in
-      diff t5 t6 "EXP TH";
       let map sym =  
         if sym = obj.proj_ind || sym = obj.proj_indpost 
         then mk_var srk 0 `TyInt
@@ -1521,17 +1852,9 @@ module OldPmfa = struct
             (mk_var srk 0 `TyInt) 
         else mk_const srk sym
       in
-      let t7 = time "EXP SIX" in
-      diff t6 t7 "EXP SIX";
-
       let substed = substitute_const srk map exp_res_pre in
-      (*SrkSimplify.simplify_terms srk*) let res = (mk_forall srk `TyInt substed) in
-      to_file srk res "/Users/jakesilverman/Documents/duet/duet/exp_phi.smt2";
-      let t2 = time "EXP OUT" in
-      diff t1 t2 "EXP";
+      let res = (mk_forall srk `TyInt substed) in
       res
-
-
 
     let pp _ _ _= failwith "todo 10"
 

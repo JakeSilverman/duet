@@ -1473,7 +1473,45 @@ let array_analyze file =
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
   Log.errorf "PARSED";
  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
+  let fp = Pmfa.elim_ite_chc srk fp in
+  List.iter (fun (_, _, constr) ->
+      Pmfa.get_offset_cands srk constr)
+    (Chc.Fp.get_rules fp);
+  (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+  let fp = Pmfa.elim_ite_chc srk fp in
+ Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
+  let fp = Pmfa.prenex_chc srk fp in
+ 
+  let fp = Pmfa.bool_factor_chc srk fp in
+  let fp = Pmfa.dumb_factor_chc srk fp in
+  let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+  let fp = Pmfa.prenex_chc srk fp in
+ 
+ let fp = Pmfa.bool_factor_chc srk fp in
+  let fp = Pmfa.dumb_factor_chc srk fp in
+  let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+  let fp = Pmfa.prenex_chc srk fp in
+ 
+   let fp = Pmfa.bool_factor_chc srk fp in
+  let fp = Pmfa.dumb_factor_chc srk fp in
+ let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+   let fp = Pmfa.collapse_juncts_chc srk fp in 
   
+  let fp = Pmfa.eq_guided_qe srk fp in
+let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+  
+  let fp = Pmfa.prenex_chc srk fp in
+ let fp = Pmfa.eq_guided_qe srk fp in
+let fp = Pmfa.eq_guided_bool_only_chc srk fp in
+  let fp = Pmfa.prenex_chc srk fp in
+
+  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
+  
+   let _ = Pmfa.check_q_array_chc srk fp in
+ *)
+
+ (*assert (1 = 2);
+
   let fp = Pmfa.eq_guided_qe srk fp in
  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   
@@ -1490,14 +1528,9 @@ let array_analyze file =
   let fp = Pmfa.prenex_chc srk fp in
   Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   let _ = Pmfa.check_q_array_chc srk fp in
+  let (*classes, rules_classes*) _ = Pmfa.pmfa_chc_offset_partitioning srk fp in*)
   logf ~level:`always "Safe"
-  (*assert (1 = 2);
-  let fp = Pmfa.skolemize_chc srk fp in
-  (*let fp = Pmfa.remove_skol_consts_chc srk fp in*)
-  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
-  Log.errorf "SKOLEMIZED";
-  let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
-  Log.errorf "offset";
+  (*Log.errorf "offset";
   let cands = Pmfa.propose_offset_candidates_seahorn srk fp classes in
   Log.errorf "PROPOSED";
 

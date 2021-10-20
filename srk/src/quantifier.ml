@@ -2408,13 +2408,19 @@ let miniscope srk phi : 'a formula =
             BatHashtbl.mem (free_vars conj) 0)
           juncts
       in
-      let l2' = List.map dec_fv_by_1 l2 in
-      let c = 
-        if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
-          mk_junct jtyp (List.map (pushdown qtyp name typ) l1))
-        else (mk_quant qtyp name typ (mk_junct jtyp l1))
-      in
-      mk_junct jtyp (c :: l2')
+      if List.length l2 > 0 && List.length l2 <= 0
+      then (
+        assert (1 = 2);
+        mk_quant qtyp name typ (mk_junct jtyp juncts)
+      )
+      else (
+        let l2' = List.map dec_fv_by_1 l2 in
+        let c = 
+          if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
+            mk_junct jtyp (List.map (pushdown qtyp name typ) l1))
+          else (mk_quant qtyp name typ (mk_junct jtyp l1))
+        in
+        mk_junct jtyp (c :: l2'))
     in
     if not (BatHashtbl.mem (free_vars phi) 0)
     then dec_fv_by_1 phi
@@ -2490,8 +2496,9 @@ let get_subst_candidate srk eqs qt_infos =
   if List.length candidates = 0 then None
   else Some (List.hd candidates)
 
+let eg_simplification _ _ = assert false
+
 let eq_guided_qe srk phi =
-  Log.errorf "ENTERING INTO EQ_GUIDED NEW with %a" (Formula.pp srk) phi;
   (* TODO: improve intersect *)
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2737,7 +2744,6 @@ let eq_guided_qe srk phi =
   in
   let block, eqs, diseqs, fv_tru, fv_fls, phi2 = Formula.eval srk alg phi in
   let _, _, _, _, phi' = apply_quant_block block eqs diseqs fv_tru fv_fls phi2 in
-  Log.errorf "EQ GUIDE ENDED\n\n\n\n\n\n\n";
   phi'
 
 
@@ -2764,7 +2770,6 @@ let get_subst_candidate srk eqs =
 
 
 let eq_guided_qe_old srk phi =
-  Log.errorf "ENTRY INTO EQ_GUIDED IS %a" (Formula.pp srk) phi;
   (* TODO: improve intersect *)
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2848,7 +2853,6 @@ let eq_guided_qe_old srk phi =
         eqs, diseqs, fv_tru', fv_fls', phi'
       )
     | `Quantify (qtyp, name, typ, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
-      Log.errorf "attempting to substitue %s" name;
       let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
       let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
       let q_fun, cand_lst = 
@@ -2869,7 +2873,6 @@ let eq_guided_qe_old srk phi =
       in
       begin match subst_term with
       | None ->
-        Log.errorf "FAILED";
         let filter_pairs lst = 
           List.filter (fun (t1, t2) ->
               (not (Hashtbl.mem (free_vars t1) 0)) &&
@@ -2880,7 +2883,6 @@ let eq_guided_qe_old srk phi =
         let diseqs = sub_pairs fls (filter_pairs diseqs) in
         eqs, diseqs, fv_tru', fv_fls', q_fun srk ~name typ phi
       | Some t ->
-        Log.errorf "succedeed";
         let t' _ = subst fls t in
         let eqs = sub_pairs t' eqs in
         let diseqs = sub_pairs t' diseqs in
@@ -2894,8 +2896,121 @@ let eq_guided_qe_old srk phi =
     | _ -> assert false
   in
   let _, _, _, _, phi2 = Formula.eval srk alg phi in
-  Log.errorf "EQ GUIDE ENDED\n\n\n\n\n\n\n";
   phi2
+
+
+
+
+let eq_guided_qe_bool_only srk phi =
+  (* TODO: improve intersect *)
+  let alg = function
+    | `Tru -> BatSet.Int.empty, BatSet.Int.empty, mk_true srk, false
+    | `Fls -> BatSet.Int.empty, BatSet.Int.empty, mk_false srk, false
+    | `Atom (`Arith (`Eq, x, y)) -> 
+      BatSet.Int.empty, BatSet.Int.empty, mk_eq srk x y, false
+    | `Atom (`ArrEq (a, b)) ->
+      BatSet.Int.empty, BatSet.Int.empty, mk_arr_eq srk a b, false
+    | `Atom (`Arith (`Lt, x, y)) -> BatSet.Int.empty, BatSet.Int.empty, mk_lt srk x y, false
+    | `Atom (`Arith (`Leq, x, y)) -> BatSet.Int.empty, BatSet.Int.empty, mk_leq srk x y, false
+    | `And conjuncts ->
+      let (fv_trus, fv_flss, conjs, changed) = 
+        List.fold_left (fun (fv_trus, fv_flss, conjs, changed) (fv_tru, fv_fls, conj, loc_changed) -> 
+            BatSet.Int.union fv_trus fv_tru, 
+            BatSet.Int.union fv_flss fv_fls,
+            conj :: conjs,
+            changed || loc_changed
+          )
+          (BatSet.Int.empty, BatSet.Int.empty, [], false)
+          conjuncts
+      in
+      fv_trus, fv_flss, mk_and srk conjs, changed
+    | `Or disjuncts ->
+       let (fv_trus, fv_flss, disjs, changed) = 
+        List.fold_left (fun (fv_trus, fv_flss, disjs, changed) (fv_tru, fv_fls, disj, loc_changed) ->
+            BatSet.Int.inter fv_trus fv_tru, 
+            BatSet.Int.inter fv_flss fv_fls,
+            disj :: disjs,
+           changed || loc_changed)
+          (BatSet.Int.empty, BatSet.Int.empty, [], false)
+          disjuncts
+      in
+      fv_trus, fv_flss, mk_or srk disjs, changed
+    | `Quantify (qtyp, name, `TyBool, (fv_tru, fv_fls, phi, changed)) ->
+      BatSet.Int.iter (fun ele -> Log.errorf "set contains %n" ele) fv_tru;
+      let q_fun = 
+        if qtyp = `Forall then mk_forall else mk_exists
+      in
+      let subst ind0 phi =
+        substitute srk (fun (ind, typ) ->
+            if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
+          phi
+      in
+      if BatSet.Int.mem 0 fv_tru && qtyp = `Exists then (
+        let t' _ = mk_true srk in
+        let phi' = subst t' phi in
+        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
+        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+
+       (fv_tru', fv_fls', phi', true) 
+      )
+      else if BatSet.Int.mem 0 fv_fls && qtyp = `Exists then (
+        let t' _ = mk_false srk in
+        let phi' = subst t' phi in
+        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
+        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+        (fv_tru', fv_fls', phi', true) 
+      )
+      else (
+        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
+        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+        let phi' = q_fun srk ~name `TyBool phi in
+        fv_tru', fv_fls', phi', changed
+      )
+    | `Quantify (qtyp, name, typ, (fv_tru, fv_fls, phi, changed)) ->
+      let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
+      let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+      let q_fun = 
+        if qtyp = `Forall then mk_forall else mk_exists
+      in
+      fv_tru', fv_fls', q_fun srk ~name typ phi, changed
+    | `Not (fv_trus, fv_flss, phi, changed) -> (fv_flss, fv_trus, mk_not srk phi, changed)
+    | `Proposition (`Var ind) -> (BatSet.Int.singleton ind, BatSet.Int.empty, mk_var srk ind `TyBool, false) 
+    | `Proposition (`App (f, args)) -> (BatSet.Int.empty, BatSet.Int.empty, mk_app srk f args, false)
+    | `Ite ((_, _, cond, changed1), (fv_tru2, fv_fls2, bthen, changed2), (fv_tru3, fv_fls3, belse, changed3)) -> 
+      BatSet.Int.inter fv_tru2 fv_tru3, BatSet.Int.inter fv_fls2 fv_fls3, mk_ite srk cond bthen belse, changed1 || changed2 || changed3
+    | _ -> assert false
+  in
+  let rec helper phi changed eqs diseqs addt_conjs mini = 
+    if changed then
+      let eqs, diseqs, phi', changed' = Formula.eval srk alg phi in
+      let mini = if changed' then false else mini in
+      helper phi' changed' eqs diseqs addt_conjs mini
+    else (
+      match BatSet.Int.min_elt_opt eqs, BatSet.Int.min_elt_opt diseqs with
+      | None, None -> 
+        if mini then (mk_and srk (phi :: addt_conjs)) else (
+          helper (miniscope srk phi) true BatSet.Int.empty BatSet.Int.empty addt_conjs true)
+      | Some ele, _ -> 
+        let phi' =
+          substitute srk (fun (ind, typ) ->
+              if ind = ele then mk_true srk else mk_var srk ind typ)
+            phi
+        in
+        helper phi' true BatSet.Int.empty BatSet.Int.empty ((mk_var srk ele `TyBool) :: addt_conjs) false
+      | _, Some ele ->
+        let phi' =
+          substitute srk (fun (ind, typ) ->
+              if ind = ele then mk_false srk else mk_var srk ind typ)
+            phi
+        in
+        helper phi' true BatSet.Int.empty BatSet.Int.empty ((mk_not srk (mk_var srk ele `TyBool)) :: addt_conjs) false
+    )
+  in
+  let phi' = helper phi true BatSet.Int.empty BatSet.Int.empty [] false in
+  phi'
+
+
+
 
 
 
