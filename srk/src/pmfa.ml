@@ -36,7 +36,7 @@ let skolemize_offset srk phi =
       let phi' = 
         substitute
           srk
-          (fun (ind, typ) -> if ind = 0 then mk_const srk sym else mk_var srk ind typ)
+          (fun (ind, typ) -> if ind = 0 then mk_const srk sym else mk_var srk (ind - 1) typ)
           phi
       in
       subst_existentials phi'
@@ -46,11 +46,11 @@ let skolemize_offset srk phi =
   subst_existentials phi
 
 let get_offset_cands srk constr =
+  Log.errorf "STARTING OFFSET CANDS FUNCTION %a" (Formula.pp srk) constr;
   let constr = skolemize_offset srk constr in
-  Log.errorf "constr is %a" (Formula.pp srk) constr;
+  Log.errorf "STARTING OFFSET CANDS FUNCTION %a" (Formula.pp srk) constr;
   let arr_tbl = Memo.memo (fun _ -> BatUref.uref VarSet.empty) in
   let int_tbl = Memo.memo (fun int_var -> BatUref.uref int_var) in
-
 
   let add_to_tbl auref ele = BatUref.uset auref (VarSet.add ele (BatUref.uget auref)) in 
   let rec populate_tbls_from_arith phi =
@@ -68,7 +68,6 @@ let get_offset_cands srk constr =
     | `Select (a, i) ->
       let a = ArrTerm.eval srk arr_term_alg a in
       Symbol.Set.iter (fun ele ->
-          Log.errorf "adding ele %a" (pp_symbol srk) ele;
           add_to_tbl (arr_tbl a) (Sym ele))
         (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols i));
       BatHashtbl.iter (fun ind typ ->
@@ -91,32 +90,38 @@ let get_offset_cands srk constr =
         | None, b -> b
         | a, None -> a
         | Some v1, Some v2 ->
-          begin match v1, v2 with
-          | Fv ind, Sym sym -> Log.errorf "uniting %n with %a" ind (pp_symbol srk) sym
-          | Sym sym, Fv ind -> Log.errorf "uniting %n with %a" ind (pp_symbol srk) sym
-          | _ -> ()
-          end;
           BatUref.unite (int_tbl v1) (int_tbl v2);
           a
       in
-      let sym_class term = 
-        Symbol.Set.fold (fun ele acc ->
-            merge acc (Some (Sym ele)))
-          (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols term))
-          None
+      (* Basically a linearity check *)
+      let has_arrays term = 
+        (BatHashtbl.length (BatHashtbl.filter (fun a -> a = `TyArr) (free_vars term))) > 0
+    || (Symbol.Set.exists (fun sym -> typ_symbol srk sym = `TyArr) (symbols term))
       in
-      let fv_class term = 
-        BatHashtbl.fold (fun ind typ acc ->
-            if typ = `TyInt
-            then merge acc (Some (Fv ind))
-            else acc)
-          (free_vars term)
-          None
-      in
-      let s_class_s, s_class_t, f_class_s, f_class_t = 
-        sym_class s, sym_class t, fv_class s, fv_class t 
-      in
-      let _ = merge s_class_s (merge s_class_t (merge f_class_s f_class_t)) in
+      if has_arrays s || has_arrays t then 
+        ()
+      else 
+        ( (* If is linear then we merge all int symbols into same clas *)     
+          let sym_class term = 
+            Symbol.Set.fold (fun ele acc ->
+                merge acc (Some (Sym ele)))
+              (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyInt) (symbols term))
+              None
+          in
+          let fv_class term = 
+            BatHashtbl.fold (fun ind typ acc ->
+                if typ = `TyInt
+                then merge acc (Some (Fv ind))
+                else acc)
+              (free_vars term)
+              None
+          in
+          let s_class_s, s_class_t, f_class_s, f_class_t = 
+            sym_class s, sym_class t, fv_class s, fv_class t 
+          in
+          let _ = merge s_class_s (merge s_class_t (merge f_class_s f_class_t)) in
+          ()
+        );
       populate_tbls_from_arith s;
       populate_tbls_from_arith t
     | `Atom (`Arith (_, s, t)) ->
@@ -132,7 +137,8 @@ let get_offset_cands srk constr =
     | `Proposition _ -> ()
     | `Ite _ -> assert false
   and arr_term_alg = function
-    | `App (sym, []) -> Sym sym 
+    | `App (sym, []) -> 
+      Sym sym 
     (* prob can't ensure no array.... doub check*)
     | `Ite _ -> assert false 
     | `Store (arr, i, v) ->
@@ -161,7 +167,10 @@ let get_offset_cands srk constr =
       (free_vars constr)
       (BatSet.Int.empty, BatSet.Int.empty)
   in
+  let arr_fv_cands = BatHashtbl.create 99 in
+  Log.errorf "TABLRES MADE";
   BatSet.Int.iter (fun arr_fv ->
+      BatHashtbl.add arr_fv_cands arr_fv BatSet.Int.empty;
       Log.errorf "Looking at free var %n" arr_fv;
       let cand_classes = 
         VarSet.fold (fun ele acc ->
@@ -175,13 +184,52 @@ let get_offset_cands srk constr =
       in
       BatSet.Int.iter (fun ind_fv ->
           if List.mem (BatUref.uget (int_tbl (Fv ind_fv))) cand_classes
-          then Log.errorf "Fv %n is CANDIDATE" ind_fv
+          then 
+            (Log.errorf "Fv %n is CANDIDATE" ind_fv;
+             BatHashtbl.modify arr_fv (BatSet.Int.add ind_fv) arr_fv_cands)
           else Log.errorf "Fv %n is NOT cnadidate" ind_fv)
         fvs_ints)
     fvs_arrs;
-  ()
+  arr_fv_cands
 
 
+
+let skolemize srk phi =
+  let decapture_tbl = BatHashtbl.create 97 in
+  let subst = 
+    Memo.memo (fun (ind, typ) ->
+        let sym = mk_symbol srk (typ :> typ) in
+        BatHashtbl.add decapture_tbl sym ind;
+        mk_const srk sym)
+  in
+  let phi = 
+    substitute
+      srk
+      subst phi
+  in
+  let rec subst_existentials subst_lst expr =
+    match Formula.destruct srk expr with
+    | `Quantify (`Exists, name, typ, phi) ->
+      subst_existentials ((mk_symbol srk ~name (typ :> typ)) :: subst_lst) phi
+    | `And conjuncts ->
+      mk_and srk (List.map (subst_existentials subst_lst) conjuncts)
+    | `Or disjuncts ->
+      mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
+    | open_form ->
+      (* TODO: make substitute more efficient *)
+      substitute
+        srk
+        (fun (i, _) -> 
+             mk_const srk (List.nth subst_lst i))
+        (Formula.construct srk open_form)
+  in
+  substitute_sym
+    srk
+    (fun sym ->
+       if Hashtbl.mem decapture_tbl sym then
+         mk_var srk (Hashtbl.find decapture_tbl sym) (typ_symbol_fo srk sym)
+       else mk_const srk sym)
+    (subst_existentials [] phi)
 
 
 type arrvar = Sym of symbol | Fv of int
@@ -189,6 +237,9 @@ type arrvar = Sym of symbol | Fv of int
 (* Not for general formula; just for those of the form we expect to be
  * output by seahorn; requries ite elim first *)
 let offset_partitioning srk phi =
+  Log.errorf "working on\n\n %a" (Formula.pp srk) phi;
+  let phi = skolemize srk phi in
+  Log.errorf "working on\n\n %a" (Formula.pp srk) phi;
   (* A map from arr var syms to BatUref objects. Two arr var syms belong
    * to the same cell if their BatUref holds the same value *)
   let class_map = BatHashtbl.create 97 in
@@ -199,13 +250,20 @@ let offset_partitioning srk phi =
           (* We will compute the equiv classes over the vars introduced
            * in this conditional and then we will transpose the result back
            * to the fvs later *)
-          BatHashtbl.add class_map ind (BatUref.uref ind);
+          BatHashtbl.add class_map (Fv ind) (BatUref.uref (Fv ind));
           let sym = mk_symbol srk `TyArr in
           BatHashtbl.add vars_to_fv sym ind;
           mk_const srk sym
         )
         else mk_var srk ind typ)
   in
+
+  Symbol.Set.iter (fun sym ->
+      if typ_symbol srk sym = `TyArr then
+        BatHashtbl.add class_map (Sym sym) (BatUref.uref (Sym sym))
+      else ())
+    (symbols phi);
+
   let phi = 
     substitute
       srk
@@ -226,7 +284,9 @@ let offset_partitioning srk phi =
   let rec arr_term_alg = function
     | `App (sym, []) -> 
       (* prob can't ensure no array.... doub check*)
-      (BatHashtbl.find vars_to_fv sym)
+      if BatHashtbl.mem vars_to_fv sym then
+        Fv (BatHashtbl.find vars_to_fv sym)
+      else Sym sym
     | `Ite _ -> assert false 
     | `Store (arr_cell, _, _) -> arr_cell
     | `App _
@@ -242,34 +302,88 @@ let offset_partitioning srk phi =
     | _ -> ()
   in
   let _ = Formula.eval srk formula_alg phi in
-  class_map
+  let class_map_fv_only = BatHashtbl.create 97 in
+  BatHashtbl.iter (fun k v ->
+      match k, (BatUref.uget v) with
+      | Fv i, Fv i2 -> BatHashtbl.add class_map_fv_only i i2
+      | Fv _, _ -> assert false (* this will have an error - need to use sel during cell uniting *)
+      | _ -> ())
+    class_map;
+  class_map_fv_only 
 
 
 (*two goals : link arrays in same equiv class
  * and determine a suitable offset for each equiv class *)
 
 let determine_offsets srk fp =
-  let chcvar_to_rule_to_var = Hashtbl.create 97 in
-  let num_rules = List.length (Fp.get_rules fp) in
-  let fv_counter = ref 0 in
-  List.iteri (fun rule_ind (conc, hypo, constr) ->
+  (*let chcvar_to_rule_to_var = Hashtbl.create 97 in*)
+  (*let num_rules = List.length (Fp.get_rules fp) in*)
+  let global_partitioning = BatHashtbl.create 97 in
+  List.iter (fun (conc, hypo, _) ->
+      List.iter (fun prop ->
+          List.iteri (fun param typ ->
+              if typ = `TyArr then (
+                if Hashtbl.mem global_partitioning {rel=Proposition.symbol_of prop; param} then ()
+                else Hashtbl.add global_partitioning {rel=Proposition.symbol_of prop; param} (BatUref.uref ({rel=Proposition.symbol_of prop; param}, None)))
+              else ())
+            (Proposition.typ_of_params srk prop))
+        (conc :: hypo))
+    (Fp.get_rules fp);
+
+  let merge_names names1 names2 = 
+    match names1, names2 with
+    | None, a 
+    | a, None -> a
+    | Some a, Some b ->
+      let names' = BatSet.String.union a b in
+      Log.errorf "A NAMES";
+      BatSet.String.iter (fun ele -> Log.errorf "name for a is %s" ele) a;
+      Log.errorf "B NAMES";
+      BatSet.String.iter (fun ele -> Log.errorf "name for a is %s" ele) b; 
+      if BatSet.String.cardinal names' = 0 then assert false else (Some names')
+  in
+  List.iteri (fun _ (conc, hypo, constr) ->
       let fvcounter = ref 0 in
       let chcvar_tbl = Hashtbl.create 50 in
+      let names_tbl = Hashtbl.create 50 in
       List.iter (fun prop ->
-          List.iteri (fun param _ ->
+          List.iteri (fun param name ->
               Hashtbl.add chcvar_tbl !fvcounter {rel=Proposition.symbol_of prop; param};
+              Hashtbl.add names_tbl !fvcounter name;
               fvcounter := !fvcounter + 1)
-            (Proposition.typ_of_params srk prop))
+            (Proposition.names_of prop))
         (conc :: hypo);
       let chcvar_of fv = Hashtbl.find chcvar_tbl fv in
+      let name_of fv = Hashtbl.find names_tbl fv in
+
       let local_arr_cells = offset_partitioning srk constr in
-      get_offset_cands srk constr;
-      let arr_cell_of fv = Hashtbl.find local_arr_cells fv in
+      Log.errorf "DONE";
+      let arr_cell_of fv = Hashtbl.find global_partitioning (chcvar_of fv) in
+      let sel (cella, namesa) (_, namesb) = 
+        cella, merge_names namesa namesb
+      in
+      let merge_cells cell1 cell2 = BatUref.unite ~sel cell1 cell2 in
       BatHashtbl.iter (fun local_arr local_cell ->
-          if (arr_cell_of local_arr) = (arr_cell_of (BatUref.uget local_cell))
+          if (arr_cell_of local_arr) = (arr_cell_of local_cell)
           then ()
-          else ())
-        local_arr_cells
+          else merge_cells (arr_cell_of local_arr) (arr_cell_of local_cell))
+        local_arr_cells;
+      (*Cells are now merged.... now we need to reduce cell available offset names *)
+
+      let offset_cands = get_offset_cands srk constr in
+      BatHashtbl.iter (fun arr_fv int_fvs ->
+          if BatSet.Int.is_empty int_fvs then ()
+          else (
+            let int_fvs_names = 
+              BatSet.String.of_list
+                (List.map (fun fv -> name_of fv) (BatSet.Int.to_list int_fvs))
+            in
+            let arr_cell, cand_names = BatUref.uget (arr_cell_of arr_fv) in
+            let cand_names' = merge_names cand_names (Some int_fvs_names) in
+            BatUref.uset (arr_cell_of arr_fv) (arr_cell, cand_names')
+          )
+        )
+        offset_cands;
       (*List.iter (fun prop ->
           List.iteri (fun param typ ->
               if typ = `TyArr then (
@@ -292,7 +406,8 @@ let determine_offsets srk fp =
             (Proposition.typ_of_params srk prop))
         (conc :: hypo))*))
     (Fp.get_rules fp);
-  chcvar_to_rule_to_var
+  global_partitioning
+  (*chcvar_to_rule_to_var*)
 
 
 (*
@@ -717,43 +832,6 @@ let bool_factor srk phi =
   phi
 
 (* Replaces existentially bound vars with skolem constants. *)
-let skolemize srk phi =
-  let decapture_tbl = BatHashtbl.create 97 in
-  let subst = 
-    Memo.memo (fun (ind, typ) ->
-        let sym = mk_symbol srk (typ :> typ) in
-        BatHashtbl.add decapture_tbl sym ind;
-        mk_const srk sym)
-  in
-  let phi = 
-    substitute
-      srk
-      subst phi
-  in
-  let rec subst_existentials subst_lst expr =
-    match Formula.destruct srk expr with
-    | `Quantify (`Exists, name, typ, phi) ->
-      subst_existentials ((mk_symbol srk ~name (typ :> typ)) :: subst_lst) phi
-    | `And conjuncts ->
-      mk_and srk (List.map (subst_existentials subst_lst) conjuncts)
-    | `Or disjuncts ->
-      mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
-    | open_form ->
-      (* TODO: make substitute more efficient *)
-      substitute
-        srk
-        (fun (i, _) -> 
-             mk_const srk (List.nth subst_lst i))
-        (Formula.construct srk open_form)
-  in
-  substitute_sym
-    srk
-    (fun sym ->
-       if Hashtbl.mem decapture_tbl sym then
-         mk_var srk (Hashtbl.find decapture_tbl sym) (typ_symbol_fo srk sym)
-       else mk_const srk sym)
-    (subst_existentials [] phi)
-
 let skolemize_chc srk fp =
   Fp.map_rules (fun (conc, hypo, constr) -> 
       conc, hypo, skolemize srk constr) 
@@ -873,7 +951,7 @@ let remove_skol_consts_chc srk fp =
 
 module CHCVarSet = BatSet.Make(CHCVar)
 (* TODO: CHC with skolem consts *)
-let pmfa_chc_offset_partitioning srk fp =
+(*let pmfa_chc_offset_partitioning srk fp =
   let rels = Fp.prop_symbols fp in
   let chc_arr_vars = 
     Symbol.Set.fold (fun rel chcvarset ->
@@ -952,7 +1030,7 @@ let pmfa_chc_offset_partitioning srk fp =
     classes;
 
   classes, rules_fv_cells
-
+*)
 (*
 let verify_offset_candidates srk fp candidates =
   let atom_has_cand atom = Hashtbl.mem candidates (Proposition.symbol_of atom) in
