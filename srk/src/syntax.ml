@@ -614,9 +614,12 @@ let rec pp_expr ?(env=Env.empty) srk formatter expr =
       formatter
       (BatList.enum (List.concat (List.map (flatten_sexpr Or) disjuncts)));
     fprintf formatter "@])"
-  | Eq, [x; y]
+  | Eq, [x; y] ->
+    fprintf formatter "@[%a == %a@]"
+      (pp_expr ~env srk) x
+      (pp_expr ~env srk) y
   | ArrEq, [x; y] ->
-    fprintf formatter "@[%a = %a@]"
+    fprintf formatter "@[%a === %a@]"
       (pp_expr ~env srk) x
       (pp_expr ~env srk) y
   | Leq, [x; y] ->
@@ -763,7 +766,7 @@ let pp_expr_unnumbered ?(env=Env.empty) srk formatter expr =
       fprintf formatter "@])"
     | Eq, [x; y] 
     | ArrEq, [x; y] ->
-      fprintf formatter "@[%a = %a@]"
+      fprintf formatter "@[%a === %a@]"
         (go ~env srk) x
         (go ~env srk) y
     | Leq, [x; y] ->

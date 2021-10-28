@@ -15,25 +15,29 @@ val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
 val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
 val elim_ite_chc : 'a context -> 'a fp -> 'a fp
 
-val get_offset_cands : 'a context -> 'a formula -> unit
+val get_offset_cands : 'a context -> 'a formula -> (int, BatSet.Int.t) Hashtbl.t 
 
 
 
 
 
+type chcvar = { rel : symbol; param : int} 
 
 val eq_guided_qe : 'a context -> 'a fp -> 'a fp
 val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
-val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t
-type chcvar = { rel : symbol; param : int} 
+(*val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t*)
+
+val determine_offsets : 'a context -> 'a fp -> 
+ (chcvar, (chcvar * BatSet.String.t option) BatUref.uref) Hashtbl.t 
+ 
 
 
 type cell = Symbol of int | Zero
 type offset = DNA | Cell of cell | Unrestricted
 
-
+(*
 val pmfa_chc_offset_partitioning : 'a context -> 'a fp -> 
-  (chcvar, chcvar) Hashtbl.t * (int, (int, chcvar option) Hashtbl.t) Hashtbl.t
+  (chcvar, chcvar) Hashtbl.t * (int, (int, chcvar option) Hashtbl.t) Hashtbl.t*)
 (*val verify_offset_candidates : 'a context -> 'a fp -> (symbol, int) Hashtbl.t -> bool*)
 val apply_offset_candidates : 
   'a context -> 
