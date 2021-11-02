@@ -28,8 +28,9 @@ val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 (*val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t*)
 
 val determine_offsets : 'a context -> 'a fp -> 
- (chcvar, (chcvar * BatSet.String.t option) BatUref.uref) Hashtbl.t 
- 
+           (chcvar,
+            (chcvar * (Syntax.symbol, BatSet.Int.t) Hashtbl.t) BatUref.uref)
+           Hashtbl.t 
 
 
 type cell = Symbol of int | Zero
