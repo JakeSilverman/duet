@@ -1139,11 +1139,11 @@ let array_analyze file =
   Hashtbl.iter (fun ke va ->
       let va, names = BatUref.uget va in
       Log.errorf "arr %s, %n belongs to class %s %n" (Syntax.show_symbol srk ke.rel) ke.param (Syntax.show_symbol srk va.rel) (va.param);
-        match names with
-        | None -> Log.errorf "No reads / writes ever occur"
-        | Some names ->
-          BatSet.String.iter (fun name -> Log.errorf "candidate name is %s" name) names;
-          if BatSet.String.cardinal names < 1 then assert false else ()
+      BatHashtbl.iter (fun rel params ->
+          BatSet.Int.iter (fun ele ->
+              Log.errorf "Offset for %s is %n" (Syntax.show_symbol srk rel) ele)
+        params)
+        names;
     )
     classes;
   Log.errorf "DONE GETING OFFSET CANDS";
