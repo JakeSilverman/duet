@@ -15,7 +15,6 @@ val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
 val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
 val elim_ite_chc : 'a context -> 'a fp -> 'a fp
 
-val get_offset_cands : 'a context -> 'a formula -> (int, BatSet.Int.t) Hashtbl.t 
 
 
 
@@ -46,9 +45,6 @@ val apply_offset_candidates :
   (int, (arrvar, chcvar option) Hashtbl.t) Hashtbl.t ->
   (int * chcvar, offset) Hashtbl.t ->
   'a fp
-val propose_offset_candidates_seahorn : 
-  'a context ->
-  'a fp -> (chcvar, chcvar) Hashtbl.t -> (chcvar, (symbol, int option) Hashtbl.t) Hashtbl.t
 val derive_offset_for_each_rule : 
   'a context ->
   'a fp ->
