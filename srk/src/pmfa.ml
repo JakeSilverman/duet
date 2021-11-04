@@ -221,84 +221,6 @@ let skolemize srk phi =
 
 type arrvar = Sym of symbol | Fv of int
 
-(* Not for general formula; just for those of the form we expect to be
- * output by seahorn; requries ite elim first *)
-let offset_partitioning srk phi =
-  Log.errorf "working on\n\n %a" (Formula.pp srk) phi;
-  let phi = skolemize srk phi in
-  Log.errorf "working on\n\n %a" (Formula.pp srk) phi;
-  (* A map from arr var syms to BatUref objects. Two arr var syms belong
-   * to the same cell if their BatUref holds the same value *)
-  let class_map = BatHashtbl.create 97 in
-  let vars_to_fv = BatHashtbl.create 97 in
-  let subst = 
-    Memo.memo (fun (ind, typ) ->
-        if typ = `TyArr then (
-          (* We will compute the equiv classes over the vars introduced
-           * in this conditional and then we will transpose the result back
-           * to the fvs later *)
-          BatHashtbl.add class_map (Fv ind) (BatUref.uref (Fv ind));
-          let sym = mk_symbol srk `TyArr in
-          BatHashtbl.add vars_to_fv sym ind;
-          mk_const srk sym
-        )
-        else mk_var srk ind typ)
-  in
-
-  Symbol.Set.iter (fun sym ->
-      if typ_symbol srk sym = `TyArr then
-        BatHashtbl.add class_map (Sym sym) (BatUref.uref (Sym sym))
-      else ())
-    (symbols phi);
-
-  let phi = 
-    substitute
-      srk
-      subst 
-      phi
-  in
-  let merge_cells cells =
-    List.fold_left (fun acc_cell cell ->
-        match acc_cell, cell with
-        | sym1, sym2 ->
-          BatUref.unite 
-            (BatHashtbl.find class_map sym1) 
-            (BatHashtbl.find class_map sym2);
-          sym1)
-      (List.hd cells)
-      cells
-  in
-  let rec arr_term_alg = function
-    | `App (sym, []) -> 
-      (* prob can't ensure no array.... doub check*)
-      if BatHashtbl.mem vars_to_fv sym then
-        Fv (BatHashtbl.find vars_to_fv sym)
-      else Sym sym
-    | `Ite _ -> assert false 
-    | `Store (arr_cell, _, _) -> arr_cell
-    | `App _
-    | `Var _ -> assert false
-  and formula_alg = function
-    | `Atom(`ArrEq (a, b)) ->
-       let cells1 = ArrTerm.eval srk arr_term_alg a in
-       let cells2 = ArrTerm.eval srk arr_term_alg b in
-       let _ = merge_cells ([cells1; cells2]) in
-       ()
-    | `Quantify (`Forall, _, _, _) -> failwith "Need to bring back old cell merging"
-    | `Ite _ -> assert false
-    | _ -> ()
-  in
-  let _ = Formula.eval srk formula_alg phi in
-  let class_map_fv_only = BatHashtbl.create 97 in
-  BatHashtbl.iter (fun k v ->
-      match k, (BatUref.uget v) with
-      | Fv i, Fv i2 -> BatHashtbl.add class_map_fv_only i i2
-      | Fv _, _ -> assert false (* this will have an error - need to use sel during cell uniting *)
-      | _ -> ())
-    class_map;
-  class_map_fv_only 
-
-
 let determine_offsets srk fp =
   let global_partitioning = BatHashtbl.create 97 in
   List.iter (fun (conc, hypo, _) ->
@@ -334,21 +256,13 @@ let determine_offsets srk fp =
         (conc :: hypo);
       let chcvar_of fv = Hashtbl.find chcvar_tbl fv in
 
-      let local_arr_cells = offset_partitioning srk constr in
       Log.errorf "DONE";
       let arr_cell_of fv = Hashtbl.find global_partitioning (chcvar_of fv) in
-      let sel (cella, namesa) (_, namesb) = 
-        cella, merge_tblsets namesa namesb
-      in
-      let merge_cells cell1 cell2 = BatUref.unite ~sel cell1 cell2 in
-      BatHashtbl.iter (fun local_arr local_cell ->
-          if (arr_cell_of local_arr) = (arr_cell_of local_cell)
-          then ()
-          else merge_cells (arr_cell_of local_arr) (arr_cell_of local_cell))
-        local_arr_cells;
-
+      
       let offset_cands = get_offset_cands srk constr in
       BatHashtbl.iter (fun arr_fv (local_arr_cell, int_fvs) ->
+          let sel (a, candsa) (_, candsb) = a, (merge_tblsets candsa candsb) in
+          BatUref.unite ~sel (arr_cell_of arr_fv) (arr_cell_of local_arr_cell);
           let arr_cell' = chcvar_of local_arr_cell in
           let local_cands = BatHashtbl.create 97 in
           BatList.iter (fun chcvar ->
