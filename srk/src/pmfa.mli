@@ -15,12 +15,14 @@ val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
 val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
 val elim_ite_chc : 'a context -> 'a fp -> 'a fp
 
-
+val determine_eq_ints_chc : 'a Syntax.context -> 'a Chc.fp -> Chc.proposition list -> 'a Syntax.formula list
 
 
 
 
 type chcvar = { rel : symbol; param : int} 
+
+module CHCVarSet : BatSet.S with type elt = chcvar
 
 val eq_guided_qe : 'a context -> 'a fp -> 'a fp
 val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
@@ -28,8 +30,9 @@ val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 
 val determine_offsets : 'a context -> 'a fp -> 
            (chcvar,
-            (chcvar * (Syntax.symbol, BatSet.Int.t) Hashtbl.t) BatUref.uref)
-           Hashtbl.t 
+            (CHCVarSet.t * (Syntax.symbol, BatSet.Int.t) Hashtbl.t)
+            BatUref.uref)
+           Hashtbl.t
 
 
 type cell = Symbol of int | Zero
@@ -45,11 +48,6 @@ val apply_offset_candidates :
   (int, (arrvar, chcvar option) Hashtbl.t) Hashtbl.t ->
   (int * chcvar, offset) Hashtbl.t ->
   'a fp
-val derive_offset_for_each_rule : 
-  'a context ->
-  'a fp ->
-  (chcvar, (symbol, int option) Hashtbl.t) Hashtbl.t ->
-  (int * chcvar, offset) Hashtbl.t
 
 
 module OldPmfa : sig
@@ -70,7 +68,7 @@ module OldPmfa : sig
    * projected to just their contents at symbolic index [j], captured by the
    * transition relation [(map a, map a')] of [tf'].*) 
   val projection :  
-    'a context -> 'a T.t -> symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t
+    'a context -> 'a T.t -> symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t * (symbol * symbol) list
 
   module Array_analysis (Iter : PreDomain) : sig
     include PreDomain
