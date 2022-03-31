@@ -1475,11 +1475,12 @@ let array_analyze file =
   Log.errorf "PARSED";
  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   let fp = Pmfa.elim_ite_chc srk fp in
+  let _ = determine_eq_ints_chc srk fp in
   (*List.iter (fun (_, _, constr) ->
       Pmfa.get_offset_cands srk constr)
     (Chc.Fp.get_rules fp);
 *)
-  let classes = Pmfa.determine_offsets srk fp in
+  (*let classes = Pmfa.determine_offsets srk fp in
   Hashtbl.iter (fun ke va ->
       let va, names = BatUref.uget va in
       Log.errorf "arr %s, %n belongs to class %s %n" (Syntax.show_symbol srk ke.rel) ke.param (Syntax.show_symbol srk va.rel) (va.param);
@@ -1489,7 +1490,7 @@ let array_analyze file =
         params)
         names;
     )
-    classes;
+    classes;*)
   Log.errorf "DONE GETING OFFSET CANDS";
   (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
   let fp = Pmfa.elim_ite_chc srk fp in

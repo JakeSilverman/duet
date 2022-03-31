@@ -96,6 +96,7 @@ module Fp = struct
   let add_query fp query = { fp with queries = Symbol.Set.add query fp.queries} 
 
   let map_rules map fp = { fp with rules = List.map map fp.rules} 
+  let filter_rules filter fp = { fp with rules = List.filter filter fp.rules} 
   let mapi_rules map fp = { fp with rules = List.mapi map fp.rules} 
 
 

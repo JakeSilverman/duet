@@ -18,6 +18,8 @@ module Fp : sig
   val add_rule : 'a fp -> proposition -> proposition list -> 'a formula -> 'a fp
   val get_rules : 'a fp -> (proposition * proposition list * 'a formula) list
   val map_rules : ((proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
+  val filter_rules : ((proposition * proposition list * 'a formula) -> bool) -> 'a fp -> 'a fp
+
   val mapi_rules : (int -> (proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
 
   (** Adds query to fp and returns a fresh name for query *)
