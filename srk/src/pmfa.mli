@@ -15,24 +15,23 @@ val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
 val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
 val elim_ite_chc : 'a context -> 'a fp -> 'a fp
 
-val determine_eq_ints_chc : 'a Syntax.context -> 'a Chc.fp -> Chc.proposition list -> 'a Syntax.formula list
+val create_offset_formula :
+           'a Syntax.context ->
+           'a Chc.fp ->
+           (Syntax.symbol, 'a Syntax.arith_term) Hashtbl.t ->
+           (Syntax.symbol, BatSet.Int.t) Hashtbl.t -> 'a Syntax.formula list
 
 
+type chcvar = { sym : symbol; param : int} 
 
-
-type chcvar = { rel : symbol; param : int} 
-
-module CHCVarSet : BatSet.S with type elt = chcvar
+module CVSet : BatSet.S with type elt = chcvar
 
 val eq_guided_qe : 'a context -> 'a fp -> 'a fp
 val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 (*val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t*)
 
-val determine_offsets : 'a context -> 'a fp -> 
-           (chcvar,
-            (CHCVarSet.t * (Syntax.symbol, BatSet.Int.t) Hashtbl.t)
-            BatUref.uref)
-           Hashtbl.t
+val determine_offsets : 'a context -> 'a fp ->
+(Syntax.symbol, int) Hashtbl.t array * (chcvar, int) Hashtbl.t
 
 
 type cell = Symbol of int | Zero

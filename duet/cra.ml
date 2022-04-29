@@ -1475,7 +1475,7 @@ let array_analyze file =
   Log.errorf "PARSED";
  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   let fp = Pmfa.elim_ite_chc srk fp in
-  let _ = determine_eq_ints_chc srk fp in
+  (*let _ = determine_eq_ints_chc srk fp in*)
   (*List.iter (fun (_, _, constr) ->
       Pmfa.get_offset_cands srk constr)
     (Chc.Fp.get_rules fp);
@@ -1492,6 +1492,8 @@ let array_analyze file =
     )
     classes;*)
   Log.errorf "DONE GETING OFFSET CANDS";
+  let _ = determine_offsets srk fp in
+  Log.errorf "DONE DETERMINING OFFSET CANDS";
   (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
   let fp = Pmfa.elim_ite_chc srk fp in
  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
