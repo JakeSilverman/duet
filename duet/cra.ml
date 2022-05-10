@@ -1115,7 +1115,7 @@ let _ =
      Arg.Clear precondition,
      " Synthesize mortal preconditions")
 
-let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard))(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
 
  let time _ =
     let t = Unix.gettimeofday () in
@@ -1148,8 +1148,11 @@ let array_analyze file =
     )
     classes;*)
   Log.errorf "DONE GETING OFFSET CANDS";
-  let _ = determine_offsets srk fp in
+  let fp = offset_analysis srk fp in
+  (*let _ = determine_offsets srk fp in*)
   Log.errorf "DONE DETERMINING OFFSET CANDS";
+ Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
+ 
   (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
   let fp = Pmfa.elim_ite_chc srk fp in
  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
