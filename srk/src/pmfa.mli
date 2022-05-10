@@ -2,10 +2,11 @@ open Syntax
 open Chc
 
 
-type arrvar = Sym of symbol | Fv of int
+type vars = Sym of symbol | Fv of int
 
 val skolemize : 'a context -> 'a formula -> 'a formula
 val skolemize_chc : 'a context -> 'a fp -> 'a fp
+val skolemize_eh_chc : 'a context -> 'a fp -> 'a fp
 val prenex_chc : 'a context -> 'a fp -> 'a fp
 val check_q_array_chc : 'a context -> 'a fp -> 'a fp
 val dumb_factor_chc : 'a context -> 'a fp -> 'a fp
@@ -14,6 +15,8 @@ val bool_factor_chc : 'a context -> 'a fp -> 'a fp
 val collapse_juncts_chc : 'a context -> 'a fp -> 'a fp
 val eq_guided_bool_only_chc : 'a context -> 'a fp -> 'a fp
 val elim_ite_chc : 'a context -> 'a fp -> 'a fp
+
+val offset_analysis : 'a context -> 'a fp -> 'a fp
 
 val create_offset_formula :
            'a Syntax.context ->
@@ -31,23 +34,11 @@ val remove_skol_consts_chc : 'a context -> 'a fp -> 'a fp
 (*val offset_partitioning : 'a context -> 'a formula -> (int, int BatUref.uref) Hashtbl.t*)
 
 val determine_offsets : 'a context -> 'a fp ->
-(Syntax.symbol, int) Hashtbl.t array * (chcvar, int) Hashtbl.t
+(Syntax.symbol, int) Hashtbl.t array * (chcvar, int) Hashtbl.t * (Syntax.symbol, int) Hashtbl.t
 
 
-type cell = Symbol of int | Zero
-type offset = DNA | Cell of cell | Unrestricted
 
-(*
-val pmfa_chc_offset_partitioning : 'a context -> 'a fp -> 
-  (chcvar, chcvar) Hashtbl.t * (int, (int, chcvar option) Hashtbl.t) Hashtbl.t*)
-(*val verify_offset_candidates : 'a context -> 'a fp -> (symbol, int) Hashtbl.t -> bool*)
-val apply_offset_candidates : 
-  'a context -> 
-  'a fp ->
-  (int, (arrvar, chcvar option) Hashtbl.t) Hashtbl.t ->
-  (int * chcvar, offset) Hashtbl.t ->
-  'a fp
-
+val eliminate_stores : 'a context -> 'a formula -> 'a formula
 
 module OldPmfa : sig
   open Iteration
@@ -57,7 +48,6 @@ module OldPmfa : sig
   module T = TransitionFormula
   val pmfa_to_lia : 'a context -> 'a T.t -> 'a T.t
 
-  val eliminate_stores : 'a context -> 'a formula -> 'a formula
 
   val unbooleanize : 'a context -> 'a formula -> 'a formula
 
@@ -69,7 +59,7 @@ module OldPmfa : sig
   val projection :  
     'a context -> 'a T.t -> symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t * (symbol * symbol) list
 
-  module Array_analysis (Iter : PreDomain) : sig
+  module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) : sig
     include PreDomain
   end
 end

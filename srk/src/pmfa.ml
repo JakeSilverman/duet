@@ -41,23 +41,6 @@ module CVSet = BatSet.Make(CHCVar)
  * Existential Elim
  *)
 
-let skolemize_offset srk phi =
-  let rec subst_existentials expr =
-    match Formula.destruct srk expr with
-    | `Quantify (`Exists, name, typ, phi) ->
-      let sym = mk_symbol srk ~name (typ :> typ) in
-      let phi' =
-        substitute
-          srk
-          (fun (ind, typ) -> if ind = 0 then mk_const srk sym else mk_var srk (ind - 1) typ)
-          phi
-      in
-      subst_existentials phi'
-    | `And conjs -> mk_and srk (List.map subst_existentials conjs)
-    | open_form -> Formula.construct srk open_form
-  in
-  subst_existentials phi
-
 (* Determines which integer fvs are equal in constr, only considering those
  * free fvs that appear in fvcands *)
 let determine_eq_int_fvs srk constr fvcands =
@@ -202,10 +185,6 @@ let create_offset_formula srk fp named_rels offsetcands =
  *)
 let local_partiton_and_cands srk constr int_fvs_set =
 
-  (* We first skolemize the formula for algorithmic simplicity. We assume
-   * that the formula contains no universal quantifiers. *)
-  let constr = skolemize_offset srk constr in
-
   (* arr_tbl maps each array variables to its cell in the array partitioning;
    * the cell additional carries along a representative (element of the cell)
    * and a list containing sets of integer variables that are used as indexes
@@ -297,13 +276,33 @@ let local_partiton_and_cands srk constr int_fvs_set =
     | `Var (i, _) -> Fv i
   in
   populate_tbls_from_phi constr;
+
+  let arr_varset = 
+    let varset = 
+      BatHashtbl.fold (fun fv typ varset ->
+          if typ = `TyArr then VarSet.add (Fv fv) varset else varset)
+        (free_vars constr)
+        VarSet.empty
+    in
+    List.filter_map 
+      (fun sym -> 
+         if typ_symbol srk sym = `TyArr then Some (Sym sym)
+         else None) 
+      (Symbol.Set.to_list (symbols constr))
+    |> VarSet.of_list
+    |> VarSet.union varset
+  in
+
   let arr_fv_class_and_cands = BatHashtbl.create 99 in
-  BatHashtbl.iter (fun ind typ ->
-      if typ = `TyArr then (
-        let arr_class, rwvs = BatUref.uget (arr_tbl (Fv ind)) in
-        let unwrapped_fv = match arr_class with Fv fv -> fv | _ -> assert false in
+  VarSet.iter (fun var ->
+        let arr_class, rwvs = BatUref.uget (arr_tbl var) in
+        let unwrapped_class = match arr_class with Fv fv -> fv | Sym sym -> 
+          Log.errorf "Sym is %a \n\n" (pp_symbol srk) sym;
+          Log.errorf "constr is %a \n\n" (Formula.pp srk) constr;
+          assert false in
         let cands =
           BatList.fold_left (fun cands rw_vars ->
+
               let adj_fvs var =
                 BatHashtbl.find_default int_adj_eqs var (VarSet.singleton var)
                 |> VarSet.to_list
@@ -331,9 +330,8 @@ let local_partiton_and_cands srk constr int_fvs_set =
             int_fvs_set
             rwvs
         in
-        BatHashtbl.add arr_fv_class_and_cands ind (unwrapped_fv, cands))
-      else ())
-    (free_vars constr);
+        BatHashtbl.add arr_fv_class_and_cands var (unwrapped_class, cands))
+    arr_varset;
   arr_fv_class_and_cands
 
 
@@ -376,7 +374,6 @@ let skolemize srk phi =
     (subst_existentials [] phi)
 
 
-type arrvar = Sym of symbol | Fv of int
 
 let determine_offsets srk fp =
   
@@ -387,7 +384,9 @@ let determine_offsets srk fp =
         List.iteri (fun param typ ->
             if typ = `TyArr then (
               let cell =  
-                (BatUref.uref (CVSet.singleton {sym; param}, Hashtbl.create 97)) 
+                (BatUref.uref (CVSet.singleton {sym; param}, 
+                               Hashtbl.create 97,
+                              Symbol.Set.empty)) 
               in
               Hashtbl.add global_partitioning {sym; param} cell))
           lst
@@ -426,24 +425,32 @@ let determine_offsets srk fp =
       (* We build a local partitioning for current rule and then merge
        * it into global partitioning *)
       let offset_cands = local_partiton_and_cands srk constr !int_fvs_set in
-      BatHashtbl.iter (fun arr_fv (local_arr_cell, int_fvs) ->
-          let sel (arrs1, cands1) (arrs2, cands2) =
-            (CVSet.union arrs1 arrs2), (intersect cands1 cands2) 
-          in
-          BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell);
-          let arr_cell = CVSet.singleton (chcvar_of local_arr_cell) in
-          let local_cands = BatHashtbl.create 97 in
-          BatList.iter (fun chcvar ->
-              BatHashtbl.modify_def
-                BatSet.Int.empty
-                chcvar.sym 
-                (BatSet.Int.add chcvar.param)
-                local_cands)
-            (List.map (fun fv -> chcvar_of fv) (BatSet.Int.to_list int_fvs));     
-          sel 
-            (BatUref.uget (cell_of arr_fv)) 
-            (arr_cell, local_cands)
-          |> BatUref.uset  (cell_of arr_fv))
+      BatHashtbl.iter (fun arr_var (local_arr_cell, int_fvs) ->
+          match arr_var with
+          | Sym sym ->
+            let cell, cands, syms = BatUref.uget (cell_of local_arr_cell) in
+            BatUref.uset (cell_of local_arr_cell) 
+              (cell, cands, Symbol.Set.add sym syms)
+          | Fv arr_fv ->
+            let sel (arrs1, cands1, syms1) (arrs2, cands2, syms2) =
+              (CVSet.union arrs1 arrs2), 
+              (intersect cands1 cands2),  
+              Symbol.Set.union syms1 syms2
+            in
+            BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell);
+            let arr_cell = CVSet.singleton (chcvar_of local_arr_cell) in
+            let local_cands = BatHashtbl.create 97 in
+            BatList.iter (fun chcvar ->
+                BatHashtbl.modify_def
+                  BatSet.Int.empty
+                  chcvar.sym 
+                  (BatSet.Int.add chcvar.param)
+                  local_cands)
+              (List.map (fun fv -> chcvar_of fv) (BatSet.Int.to_list int_fvs));     
+            sel 
+              (BatUref.uget (cell_of arr_fv)) 
+              (arr_cell, local_cands, Symbol.Set.empty)
+            |> BatUref.uset  (cell_of arr_fv))
         offset_cands)
     (Fp.get_rules fp);
   (* Obtain a single copy of each cell / offset proposals *)
@@ -463,10 +470,11 @@ let determine_offsets srk fp =
     |> BatArray.of_list
   in
   let chcvar_to_cell = Hashtbl.create 97 in
+  let sym_to_cell = Hashtbl.create 97 in
   (* We will create an LIA formula for each cell whose solution is a valid set 
    * of offset candidates that takes proposed candidates into account. *)
   let cell_to_offset = 
-    BatArray.mapi (fun cell_num (arrs, offsetcands) ->
+    BatArray.mapi (fun cell_num (arrs, offsetcands, syms) ->
         (* Create list of relations occuring in this cell *)
         let relations = CVSet.fold (fun chcvar relations ->
             Symbol.Set.add chcvar.sym relations)
@@ -543,10 +551,12 @@ let determine_offsets srk fp =
               imp; 
             CVSet.iter (fun arr -> Hashtbl.add chcvar_to_cell arr cell_num)
               arrs;
+            Symbol.Set.iter (fun sym -> Hashtbl.add sym_to_cell sym cell_num)
+              syms;
             offsets)
       array_cells
   in
-  cell_to_offset, chcvar_to_cell
+  cell_to_offset, chcvar_to_cell, sym_to_cell
 
 
 
@@ -888,164 +898,207 @@ let remove_skol_consts_chc srk fp =
       conc, hypo, remove_skol_consts srk constr) 
     fp
 
-(* In the function apply_offset_formula we label each expression with an 
- * associated element of type offset. The offset is the value by which we
- * value by which we must increment the free var "0" where it does not occur
- * in an select term. DNA, does not apply, means that the expression cannot
- * contain the free var "0". Cell is the case where the increment must be by 
- * by a fixed term and unrestricted is the case where the offset has not yet
- * been locked to a specific term. *)
-type cell = Symbol of int | Zero
-type offset = DNA | Cell of cell | Unrestricted
+
+let apply_offset_candidate srk constr offsets =
+  let rec apply_offset_formula = function
+    | `Atom (`Arith (op, s, t)) ->
+      let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
+      let s = ArithTerm.eval srk apply_offset_arith s in
+      let t = ArithTerm.eval srk apply_offset_arith t in
+      op srk s t
+    | `Atom(`ArrEq _) -> (* TODO *) assert false
+    | `Proposition (`App (sym, [])) -> mk_const srk sym
+    | `Ite _ -> assert false
+    | `Proposition _ -> assert false
+    | `Quantify _ -> assert false
+    | open_formula -> Formula.construct srk open_formula 
+  and apply_offset_arith = function
+    | `Select (a, term) ->
+      let a, offset = ArrTerm.eval srk apply_offset_arr a in
+      (* look into getting rid of div by char size *)
+      mk_select 
+        srk 
+        a 
+        (mk_floor srk (mk_div srk (mk_sub srk term (mk_var srk offset `TyInt)) (mk_int srk 4)))
+    | `Ite _ -> assert false
+    | open_term -> ArithTerm.construct srk open_term
+  and apply_offset_arr = function
+    | `App (sym, []) -> 
+      mk_const srk sym, Option.get (Hashtbl.find offsets (Sym sym))
+    | `Var (ind, typ) -> 
+      mk_var srk ind (typ :> typ_fo), Option.get (Hashtbl.find offsets (Fv ind))
+    | `Store ((a, offset), i, v) ->
+      let i = ArithTerm.eval srk apply_offset_arith i in
+      (* Look into getting rid of div by char size *)
+      let i_offset = 
+        mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk offset `TyInt)) (mk_int srk 4))
+      in
+      let v = ArithTerm.eval srk apply_offset_arith v in
+      mk_store srk a i_offset v, offset
+    | _ -> assert false
+  in
+  
+  Formula.eval srk apply_offset_formula constr
 
 
+let apply_offset_candidates_new srk fp cell_to_offsets chcvar_to_cell sym_to_cell =
+  Fp.map_rules (fun (conc, hypo, constr) ->
+      let fv_of = BatHashtbl.create 97 in
+      iter_fvs (fun fv rel param -> 
+          BatHashtbl.add 
+            fv_of
+            {sym=Proposition.symbol_of rel; param}
+            fv) 
+        (conc :: hypo);
+      let rec sel_offset offsets rels = 
+        match rels with
+        | [] -> None
+        | hd :: tl ->
+          if Hashtbl.mem offsets hd then (
+            Some (Hashtbl.find fv_of {sym=hd;param=Hashtbl.find offsets hd}))
+          else sel_offset offsets tl
+      in
+      let fv_of = Hashtbl.find fv_of in
 
+      let cell_to_offset = 
+        BatArray.map (fun offsets ->
+            let rels = List.map Proposition.symbol_of (conc :: hypo) in
+            sel_offset offsets rels)
+          cell_to_offsets
+      in
+      let offsets = Hashtbl.create 97 in
+      Hashtbl.iter (fun chcvar cell ->
+          Hashtbl.add offsets (Fv (fv_of chcvar)) cell_to_offset.(cell))
+        chcvar_to_cell;
+      Hashtbl.iter (fun sym cell ->
+          Hashtbl.add offsets (Sym sym) cell_to_offset.(cell))
+        sym_to_cell;
+      conc, hypo, apply_offset_candidate srk constr offsets)
+    fp
 
-
-
-let apply_offset_formula srk arr_var_offsets phi props =
-  (* TODO: 
-   * find equiv classes for quant array vars
-   * expand array equality *)
-  let fv_to_vars = BatHashtbl.create 97 in
-  let vars_to_fv = BatHashtbl.create 97 in
-
-  let param_counter = ref 0 in
-  List.iter (fun prop ->
-      param_counter := !param_counter + List.length (Proposition.typ_of_params srk prop);
-    )
-    props;
-
+let skolemize_eh srk phi =
+  let decapture_tbl = BatHashtbl.create 97 in
   let subst = 
     Memo.memo (fun (ind, typ) ->
         let sym = mk_symbol srk (typ :> typ) in
-        BatHashtbl.add vars_to_fv sym ind;
-        BatHashtbl.add fv_to_vars ind sym;
+        BatHashtbl.add decapture_tbl sym ind;
         mk_const srk sym)
   in
-
   let phi = 
     substitute
       srk
       subst phi
   in
-
-  let merge_cells cells =
-    List.fold_left (fun acc cell ->
-        match acc, cell with
-        | v, Unrestricted -> v
-        | Unrestricted, v -> v
-        | Cell c1, Cell c2 -> if c1 = c2 then Cell c1 else assert false
-        | DNA, DNA -> DNA
-        | _ -> assert false)
-      Unrestricted
-      cells
-  in
-  let offset = mk_symbol ~name:"offset" srk `TyInt in
-  let rec apply_offset_formula = function
-    | `Tru -> mk_true srk, Unrestricted
-    | `Fls -> mk_false srk, Unrestricted
-    | `Not (phi, cell) -> mk_not srk phi, cell
-    | `And objs -> 
-      let phis, cells = List.split objs in
-      mk_and srk phis, merge_cells cells
-    | `Or objs ->
-      let phis, cells = List.split objs in
-      mk_or srk phis, merge_cells cells 
-    | `Atom (`Arith (op, s, t)) ->
-      let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
-      let (s, cells) = ArithTerm.eval srk apply_offset_arith s in
-      let (t, cellt) = ArithTerm.eval srk apply_offset_arith t in
-      op srk s t, merge_cells [cells; cellt]
-    | `Atom(`ArrEq _) -> assert false
-    | `Quantify (`Forall, name, `TyInt, (phi, cell)) ->
-      let subst offset_term = 
-        substitute_const 
-          srk 
-          (fun sym -> if sym = offset then offset_term else mk_const srk sym)
-          phi
+  let rec subst_existentials subst_lst syms expr =
+    match Formula.destruct srk expr with
+    | `Quantify (`Exists, name, typ, phi) ->
+      let sym = mk_symbol srk ~name (typ :> typ) in
+      let syms' = Symbol.Set.add sym syms in
+      subst_existentials (sym :: subst_lst) syms' phi
+    | `And conjuncts ->
+      let phis, symss =  
+        (List.map (subst_existentials subst_lst Symbol.Set.empty) conjuncts)
+        |> BatList.split
       in
-      begin match cell with
-        | DNA -> assert false
-        | Cell (Symbol sym) ->
-          mk_forall srk ~name `TyInt (subst (mk_const srk (Hashtbl.find fv_to_vars sym))), DNA
-        | Cell (Zero)  
-        | Unrestricted -> mk_forall srk ~name `TyInt (subst (mk_zero srk)), DNA
-      end
-    | `Proposition (`App (sym, [])) -> mk_const srk sym, Unrestricted
-    | `Ite _ -> assert false
-    | `Proposition _ -> assert false
-    | `Quantify _ -> assert false
-    | `Atom(`IsInt _) -> assert false
-  and apply_offset_arith = function
-    | `Real q -> mk_real srk q, Unrestricted
-    | `App (sym, []) -> mk_const srk sym, Unrestricted
-    | `Var (0, `TyInt)  -> 
-      mk_add srk [mk_var srk 0 `TyInt; mk_const srk offset], Unrestricted
-    | `Add objs -> 
-      let terms, cells = BatList.split objs in
-      mk_add srk terms, merge_cells cells
-    | `Mul objs ->
-      let terms, cells = BatList.split objs in
-      mk_mul srk terms, merge_cells cells
-    | `Binop (op, (term1, cell1), (term2, cell2)) ->
-      let op = match op with `Div -> mk_div srk | `Mod -> mk_mod srk in
-      op term1 term2, merge_cells [cell1; cell2]
-    | `Unop (op, (term, cell)) -> 
-      let op = match op with `Floor -> mk_floor srk | `Neg -> mk_neg srk in
-      op term, cell
-    | `Select (a, (term, cell)) ->
-      let a, base_arr_cell, cella = ArrTerm.eval srk apply_offset_arr a in
-      begin match base_arr_cell with
-        | Cell (Zero) -> mk_select srk a (mk_floor srk (mk_div srk term (mk_int srk 4))), merge_cells [cell; cella]
-        | Cell(Symbol(sym)) -> 
-          mk_select srk a (mk_floor srk (mk_div srk (mk_sub srk term (mk_const srk (Hashtbl.find fv_to_vars sym))) (mk_int srk 4))), merge_cells [cell; cella] 
-        | _ -> assert false
-      end
-    | `Ite _ -> assert false
-    | _ -> assert false 
-  and apply_offset_arr = function
-    | `App (sym, []) -> 
-      begin match BatHashtbl.find_option vars_to_fv sym with
-        | Some i ->
-          mk_const srk sym, Hashtbl.find arr_var_offsets (Fv i), Unrestricted
-        | None -> 
-          mk_const srk sym, Hashtbl.find arr_var_offsets (Sym sym), Unrestricted 
-      end
-    | `Ite _ -> assert false
-    | `Store _ -> assert false
+     mk_and srk phis,
+      List.fold_left Symbol.Set.union syms symss
+    | `Or disjuncts ->
+      let phis, symss =  
+        (List.map (subst_existentials subst_lst Symbol.Set.empty) disjuncts)
+        |> BatList.split
+      in
+      mk_or srk phis,
+      List.fold_left Symbol.Set.union syms symss
+    | open_form ->
+      (* TODO: make substitute more efficient *)
+      substitute
+        srk
+        (fun (i, _) -> 
+           mk_const srk (List.nth subst_lst i))
+        (Formula.construct srk open_form),
+      syms
+  in
+  let phi', syms = subst_existentials [] Symbol.Set.empty phi in
+  let quant_free = function
+    | `Quantify _ -> failwith "skolemize eh has unexpected quantifiers"
+    | _ -> ()
+  in
+  Formula.eval srk quant_free phi';
+  phi', syms
+
+
+let skolemize_eh_chc srk fp =
+  let skolemized_vars = BatHashtbl.create 97 in
+  Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
+      let phi', syms = skolemize_eh srk constr in
+      BatHashtbl.add skolemized_vars ind syms;
+      conc, hypo, phi')
+    fp
+
+
+
+ let eliminate_stores srk phi =
+  let mk_op op =
+    match op with
+    | `Eq -> mk_eq
+    | `Lt -> mk_lt
+    | `Leq -> mk_leq
+  in
+  let rec rewrite_store index node =
+    match ArrTerm.destruct srk node with
+    | `Store (a, i, v) ->
+      let i = ArithTerm.eval srk arith_alg i in
+      let v = ArithTerm.eval srk arith_alg v in
+      mk_ite srk (mk_eq srk i index) v (rewrite_store index a)
+    | `Var (ind, `TyArr) -> mk_select srk (mk_var srk ind `TyArr) index
+    | `App (a, []) -> mk_select srk (mk_const srk a) index
+    | `Ite (phi, a, b) -> 
+      mk_ite 
+        srk 
+        (Formula.eval srk alg phi) 
+        (rewrite_store index a)
+        (rewrite_store index b)
     | _ -> assert false
+  and  arith_alg = function
+    | `Select (a, i) -> rewrite_store i a
+    | `Ite (phi, x, y) -> mk_ite srk (Formula.eval srk alg phi) x y
+    | open_term -> ArithTerm.construct srk open_term
+  and alg = function
+    | `Atom (`Arith (op, x, y)) ->
+      (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
+    | `Atom(`ArrEq (a, b)) -> 
+      let index = mk_symbol srk `TyInt in
+      let lhs = rewrite_store (mk_const srk index) a in
+      let rhs = rewrite_store (mk_const srk index) b in
+      mk_forall_const srk index (mk_eq srk lhs rhs)
+    | open_formula -> Formula.construct srk open_formula
   in
-  
-  let phi = fst (Formula.eval srk apply_offset_formula phi) in
-  substitute_sym
-    srk
-    (fun sym ->
-       if Hashtbl.mem vars_to_fv sym then
-         mk_var srk (Hashtbl.find vars_to_fv sym) (typ_symbol_fo srk sym)
-       else mk_const srk sym)
-    phi
+  Formula.eval srk alg phi
 
-let apply_offset_candidates srk fp rule_cells class_candidates =
-  let map ind (conc, hypos, constr) =  
-        let var_to_cell = Hashtbl.create 97 in
-        BatHashtbl.iter (fun var cell -> 
-            match cell with
-            | None -> BatHashtbl.add var_to_cell var (Cell(Zero))
-            | Some cell -> 
-              Log.errorf "Looking for rule %n cell %s param %n" ind (show_symbol srk cell.sym) cell.param;
-              Log.errorf "%a" (Formula.pp srk) constr;
-              try 
-                BatHashtbl.add var_to_cell var (BatHashtbl.find class_candidates (ind, cell))
-              with _ -> BatHashtbl.add var_to_cell var (Cell(Zero))
-          )
-          (BatHashtbl.find rule_cells ind);
-        Log.errorf "no failure";
-        let constr' = apply_offset_formula srk var_to_cell constr (conc :: hypos) in
-        conc, hypos, constr'
+
+
+
+let offset_analysis srk fp =
+
+  let skolemized_vars = BatHashtbl.create 97 in
+  let fp' = 
+    Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
+        let phi', syms = skolemize_eh srk constr in
+        BatHashtbl.add skolemized_vars ind syms;
+        conc, hypo, phi')
+      fp
   in
-  Fp.mapi_rules map fp
+  let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
+    determine_offsets srk fp'
+  in
+  let fp'' = 
+    apply_offset_candidates_new srk fp cell_to_offsets chcvar_to_cell sym_to_cell 
+  in
 
+  (* Unskolemize *)
+  (* try some of the exist quant generalization functions *)
+
+  fp''
 
 
 
@@ -1230,44 +1283,6 @@ module OldPmfa = struct
     T.make ~exists:(T.exists tf) phi (T.symbols tf)
 
   
- let eliminate_stores srk phi =
-  let mk_op op =
-    match op with
-    | `Eq -> mk_eq
-    | `Lt -> mk_lt
-    | `Leq -> mk_leq
-  in
-  let rec rewrite_store index node =
-    match ArrTerm.destruct srk node with
-    | `Store (a, i, v) ->
-      let i = ArithTerm.eval srk arith_alg i in
-      let v = ArithTerm.eval srk arith_alg v in
-      mk_ite srk (mk_eq srk i index) v (rewrite_store index a)
-    | `Var (ind, `TyArr) -> mk_select srk (mk_var srk ind `TyArr) index
-    | `App (a, []) -> mk_select srk (mk_const srk a) index
-    | `Ite (phi, a, b) -> 
-      mk_ite 
-        srk 
-        (Formula.eval srk alg phi) 
-        (rewrite_store index a)
-        (rewrite_store index b)
-    | _ -> assert false
-  and  arith_alg = function
-    | `Select (a, i) -> rewrite_store i a
-    | `Ite (phi, x, y) -> mk_ite srk (Formula.eval srk alg phi) x y
-    | open_term -> ArithTerm.construct srk open_term
-  and alg = function
-    | `Atom (`Arith (op, x, y)) ->
-      (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
-    | `Atom(`ArrEq (a, b)) -> 
-      let index = mk_symbol srk `TyInt in
-      let lhs = rewrite_store (mk_const srk index) a in
-      let rhs = rewrite_store (mk_const srk index) b in
-      mk_forall_const srk index (mk_eq srk lhs rhs)
-    | open_formula -> Formula.construct srk open_formula
-  in
-  Formula.eval srk alg phi
-
  (* Changes bool syms to int syms... when I wrote this some of the other functions
   * in this module failed with presence of booleans. Need to check if this is still the
   * case if not just fix this. This function messes with types of tr_symbols are that
@@ -1302,8 +1317,7 @@ module OldPmfa = struct
       mk_and srk (phi_subst :: bool_constrs) 
 
 
-
-  module Array_analysis (Iter : PreDomain) = struct
+  module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) = struct
 
     type 'a t = 
       { iter_obj : 'a Iter.t; 
@@ -1334,127 +1348,6 @@ module OldPmfa = struct
        iter_trs=(T.symbols lia_tf);
        ground_lia;
        arr_only_trs }
-
-    type 'a dir_var = Inc of 'a arith_term * 'a arith_term | Dec of 'a arith_term * 'a arith_term
-    
-    (* Determines which trs in phi are monotonically increasing/decreasing *)
-    let directional_vars srk phi trs =
-      List.flatten (
-        List.filter_map (fun (x, x') ->
-            let xt, xt' = mk_const srk x, mk_const srk x' in
-            match Smt.entails srk phi (mk_leq srk xt xt'), 
-                  Smt.entails srk phi (mk_leq srk xt' xt) with
-            | `Yes, `Yes -> Some [Inc (xt, xt'); Dec (xt, xt')]
-            | `Yes, _ -> Some [Inc (xt, xt')]
-            | _, `Yes -> Some [Dec (xt, xt')]
-            | _ -> None)
-          trs)
-
-    let create_phased_exps srk phi trs symb_index directs lc =
-      let exp1term = mk_symbol srk ~name:"exp1" `TyInt in
-      let exp2term = mk_symbol srk ~name:"exp2" `TyInt in
-      List.map (fun direction ->
-          match direction with
-          | Inc (x, x') ->
-            let j = mk_const srk symb_index in
-
-            let phase1 = 
-              T.make 
-                (mk_and srk 
-                   [Iter.exp
-                      srk 
-                      trs 
-                      (mk_const 
-                         srk 
-                         exp1term) 
-                         (Iter.abstract 
-                            srk 
-                            (T.make (mk_and srk [phi; mk_leq srk x j; mk_leq srk x' j]) trs));
-                    mk_leq srk x j; mk_leq srk x' j])
-                trs
-            in
-            let phase2 =
-              T.make
-                (mk_and srk 
-                   [Iter.exp
-                      srk 
-                      trs 
-                      (mk_const 
-                         srk 
-                         exp2term)
-                         (Iter.abstract 
-                            srk 
-                            (T.make (mk_and srk [phi; mk_lt srk j x; mk_lt srk j x']) trs));
-                    mk_lt srk j x; mk_lt srk j x'])
-                trs
-            in
-            let intermediate_tr = 
-              T.make 
-                (mk_and srk [phi; mk_leq srk x j; mk_lt srk j x'])
-                trs
-            in
-
-            let phased_tr = T.mul srk (T.mul srk phase1 intermediate_tr) phase2 in
-
-            (* Adds constraints on loop counter depending on which phase(s) taken*)
-            let both_phases = 
-              T.map_formula (fun f ->
-                  mk_and 
-                    srk
-                    [mk_eq 
-                       srk 
-                       lc 
-                       (mk_add srk [mk_const srk exp2term;
-                                    mk_const srk exp1term;
-                                    mk_int srk 1]);
-                     f])
-                phased_tr
-            in
-            let phase1_only = 
-              T.map_formula (fun f ->
-                  mk_and 
-                    srk
-                    [mk_eq srk lc (mk_const srk exp1term);
-                     f])
-                phase1
-            in
-            let phase2_only = 
-              T.map_formula (fun f ->
-                  mk_and 
-                    srk
-                    [mk_eq srk lc (mk_const srk exp2term);
-                     f])
-                phase2
-            in
-                     
-
-            let phased_exp =
-              T.map_formula
-                (fun f ->
-                   mk_and
-                     srk
-                     [mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
-                      mk_leq srk (mk_zero srk) (mk_const srk exp2term);
-                      f]) 
-                (T.add srk (T.add srk both_phases phase1_only) phase2_only)
-            in
-            (* Need to quantify over newly introduce symbols *)
-            (*
-            let final =
-              mk_exists_consts
-                srk
-                (fun sym -> not (Symbol.Set.mem sym !exists))
-                entire_formula
-            in*)
-            T.map_formula 
-              (fun f ->
-                 mk_exists_const srk exp1term (mk_exists_const srk exp2term f))
-              phased_exp
-
-          | Dec _ -> T.make (mk_true srk) trs (* turned off for now to make testing smoother *)
-            )
-        directs, exp1term, exp2term
-
      
     let at_most_single_write srk write noop trs =
       let exp = mk_symbol srk ~name:"exp" `TyInt in
@@ -1494,7 +1387,7 @@ module OldPmfa = struct
       let write = T.make write obj.iter_trs in
       let noop = T.make noop obj.iter_trs in
 
-      let _ = 
+      let nstarwnstar = 
         if at_most_single_write srk write noop obj.iter_trs 
         then (
           let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
@@ -1529,26 +1422,52 @@ module OldPmfa = struct
           let write_once = 
             T.mul srk noop_star1 (T.mul srk write noop_star2)
           in
-          write_once
+          let lc_constr = 
+            mk_and srk 
+              [mk_eq
+                 srk
+                 lc
+                 (mk_add srk [mk_const srk exp1;
+                              mk_const srk exp2;
+                              mk_int srk 1]);
+                 mk_leq srk (mk_zero srk) (mk_const srk exp1);
+               mk_leq srk (mk_zero srk) (mk_const srk exp2)]
+          in
+          mk_and 
+            srk 
+            [mk_exists_consts 
+               srk
+               (T.exists write_once)
+               (T.formula write_once); 
+             lc_constr]
         )
         else assert false
       in
 
-      let directs = directional_vars srk obj.ground_lia obj.iter_trs in
-      let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc in
       let noop_eqs = 
         List.map 
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
           obj.iter_trs
       in
-      (* Redo this part to act on tfs rather than first converting to formula *)
-      let directs_res = List.map (fun f -> T.formula f) directs_res in
-      let direct_res = mk_and srk directs_res in
-      let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
+      let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
+      let nstar =
+        Iter2.exp
+           srk 
+           obj.iter_trs 
+           lc
+           (Iter2.abstract 
+              srk 
+              noop)
+      in
+
+
+
       let exp_res_pre = 
         mk_or 
           srk 
-          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs); direct_res] 
+          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
+           nstar;
+           nstarwnstar] 
       in
       let map sym =  
         if sym = obj.proj_ind || sym = obj.proj_indpost 
@@ -1562,37 +1481,6 @@ module OldPmfa = struct
       let res = (mk_forall srk `TyInt substed) in
       res
 
-    
-   (* 
-    let exp srk _ lc obj =
-      let directs = directional_vars srk obj.ground_lia obj.iter_trs in
-      let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc in
-      let noop_eqs = 
-        List.map 
-          (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
-          obj.iter_trs
-      in
-      (* Redo this part to act on tfs rather than first converting to formula *)
-      let directs_res = List.map (fun f -> T.formula f) directs_res in
-      let direct_res = mk_and srk directs_res in
-      let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
-      let exp_res_pre = 
-        mk_or 
-          srk 
-          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs); direct_res] 
-      in
-      let map sym =  
-        if sym = obj.proj_ind || sym = obj.proj_indpost 
-        then mk_var srk 0 `TyInt
-        else if Hashtbl.mem obj.arr_map sym 
-        then mk_select srk (mk_const srk (Hashtbl.find obj.arr_map sym)) 
-            (mk_var srk 0 `TyInt) 
-        else mk_const srk sym
-      in
-      let substed = substitute_const srk map exp_res_pre in
-      let res = (mk_forall srk `TyInt substed) in
-      res
-*)
     let pp _ _ _= failwith "todo 10"
 
   end
