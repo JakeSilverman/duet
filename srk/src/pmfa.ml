@@ -296,9 +296,7 @@ let local_partiton_and_cands srk constr int_fvs_set =
   let arr_fv_class_and_cands = BatHashtbl.create 99 in
   VarSet.iter (fun var ->
         let arr_class, rwvs = BatUref.uget (arr_tbl var) in
-        let unwrapped_class = match arr_class with Fv fv -> fv | Sym sym -> 
-          Log.errorf "Sym is %a \n\n" (pp_symbol srk) sym;
-          Log.errorf "constr is %a \n\n" (Formula.pp srk) constr;
+        let unwrapped_class = match arr_class with Fv fv -> fv | Sym _ -> 
           assert false in
         let cands =
           BatList.fold_left (fun cands rw_vars ->
@@ -426,11 +424,19 @@ let determine_offsets srk fp =
        * it into global partitioning *)
       let offset_cands = local_partiton_and_cands srk constr !int_fvs_set in
       BatHashtbl.iter (fun arr_var (local_arr_cell, int_fvs) ->
+          let local_cands = BatHashtbl.create 97 in
+          BatList.iter (fun chcvar ->
+              BatHashtbl.modify_def
+                BatSet.Int.empty
+                chcvar.sym 
+                (BatSet.Int.add chcvar.param)
+                local_cands)
+            (List.map (fun fv -> chcvar_of fv) (BatSet.Int.to_list int_fvs));
           match arr_var with
           | Sym sym ->
             let cell, cands, syms = BatUref.uget (cell_of local_arr_cell) in
             BatUref.uset (cell_of local_arr_cell) 
-              (cell, cands, Symbol.Set.add sym syms)
+              (cell, intersect cands local_cands, Symbol.Set.add sym syms)
           | Fv arr_fv ->
             let sel (arrs1, cands1, syms1) (arrs2, cands2, syms2) =
               (CVSet.union arrs1 arrs2), 
@@ -439,18 +445,10 @@ let determine_offsets srk fp =
             in
             BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell);
             let arr_cell = CVSet.singleton (chcvar_of local_arr_cell) in
-            let local_cands = BatHashtbl.create 97 in
-            BatList.iter (fun chcvar ->
-                BatHashtbl.modify_def
-                  BatSet.Int.empty
-                  chcvar.sym 
-                  (BatSet.Int.add chcvar.param)
-                  local_cands)
-              (List.map (fun fv -> chcvar_of fv) (BatSet.Int.to_list int_fvs));     
-            sel 
+           sel 
               (BatUref.uget (cell_of arr_fv)) 
               (arr_cell, local_cands, Symbol.Set.empty)
-            |> BatUref.uset  (cell_of arr_fv))
+            |> BatUref.uset (cell_of arr_fv))
         offset_cands)
     (Fp.get_rules fp);
   (* Obtain a single copy of each cell / offset proposals *)
@@ -505,24 +503,7 @@ let determine_offsets srk fp =
         in
 
         let subchc_formula = create_offset_formula srk subchc symb_rel_params offsetcands in
-        (*let proposals_phi = 
-          BatHashtbl.fold (fun rel fvs proposals_all_rels ->
-              if Hashtbl.mem symb_rel_params rel then
-                (BatSet.Int.fold (fun fv proposals_single_rel ->
-                     (mk_eq srk (Hashtbl.find symb_rel_params rel) (mk_int srk fv))
-                     :: proposals_single_rel)
-                    fvs
-                    []
-                 |> mk_or srk)
-                :: proposals_all_rels
-              else proposals_all_rels) 
-            offsetcands
-            []
-          |> mk_and srk
-        in*)
         let offset_formula = mk_and srk subchc_formula in
-        List.iter (fun phi -> Log.errorf "subchc form is %a" (Formula.pp srk) phi) subchc_formula;
-        (*Log.errorf "proposed offsets are %a" (Formula.pp srk) proposals_phi;*)
 
         let solver = Smt.mk_solver srk in
         Smt.Solver.add solver [offset_formula];
@@ -906,10 +887,14 @@ let apply_offset_candidate srk constr offsets =
       let s = ArithTerm.eval srk apply_offset_arith s in
       let t = ArithTerm.eval srk apply_offset_arith t in
       op srk s t
-    | `Atom(`ArrEq _) -> (* TODO *) assert false
+    | `Atom(`ArrEq (a, b)) ->
+      let a, _ = ArrTerm.eval srk apply_offset_arr a in
+      let b, _ = ArrTerm.eval srk apply_offset_arr b in
+      mk_arr_eq srk a b
     | `Proposition (`App (sym, [])) -> mk_const srk sym
-    | `Ite _ -> assert false
+    | `Proposition (`Var ind) -> mk_var srk ind `TyBool
     | `Proposition _ -> assert false
+    | `Ite _ -> assert false
     | `Quantify _ -> assert false
     | open_formula -> Formula.construct srk open_formula 
   and apply_offset_arith = function
@@ -925,7 +910,7 @@ let apply_offset_candidate srk constr offsets =
   and apply_offset_arr = function
     | `App (sym, []) -> 
       mk_const srk sym, Option.get (Hashtbl.find offsets (Sym sym))
-    | `Var (ind, typ) -> 
+    | `Var (ind, typ) ->
       mk_var srk ind (typ :> typ_fo), Option.get (Hashtbl.find offsets (Fv ind))
     | `Store ((a, offset), i, v) ->
       let i = ArithTerm.eval srk apply_offset_arith i in
@@ -943,22 +928,23 @@ let apply_offset_candidate srk constr offsets =
 
 let apply_offset_candidates_new srk fp cell_to_offsets chcvar_to_cell sym_to_cell =
   Fp.map_rules (fun (conc, hypo, constr) ->
-      let fv_of = BatHashtbl.create 97 in
+      let fvs_of = BatHashtbl.create 97 in
       iter_fvs (fun fv rel param -> 
-          BatHashtbl.add 
-            fv_of
+          BatHashtbl.modify_def 
+            BatSet.Int.empty
             {sym=Proposition.symbol_of rel; param}
-            fv) 
+            (BatSet.Int.add fv)
+            fvs_of) 
         (conc :: hypo);
       let rec sel_offset offsets rels = 
         match rels with
         | [] -> None
         | hd :: tl ->
           if Hashtbl.mem offsets hd then (
-            Some (Hashtbl.find fv_of {sym=hd;param=Hashtbl.find offsets hd}))
+            Some (BatSet.Int.choose (Hashtbl.find fvs_of {sym=hd;param=Hashtbl.find offsets hd})))
           else sel_offset offsets tl
       in
-      let fv_of = Hashtbl.find fv_of in
+      let fvs_of = Hashtbl.find fvs_of in
 
       let cell_to_offset = 
         BatArray.map (fun offsets ->
@@ -968,27 +954,21 @@ let apply_offset_candidates_new srk fp cell_to_offsets chcvar_to_cell sym_to_cel
       in
       let offsets = Hashtbl.create 97 in
       Hashtbl.iter (fun chcvar cell ->
-          Hashtbl.add offsets (Fv (fv_of chcvar)) cell_to_offset.(cell))
+          try
+            BatSet.Int.iter (fun fv ->
+                Hashtbl.add offsets (Fv fv) cell_to_offset.(cell))
+              (fvs_of chcvar)
+          with _ -> ())
         chcvar_to_cell;
       Hashtbl.iter (fun sym cell ->
-          Hashtbl.add offsets (Sym sym) cell_to_offset.(cell))
+          try
+            Hashtbl.add offsets (Sym sym) cell_to_offset.(cell)
+          with _ -> ())
         sym_to_cell;
       conc, hypo, apply_offset_candidate srk constr offsets)
     fp
 
-let skolemize_eh srk phi =
-  let decapture_tbl = BatHashtbl.create 97 in
-  let subst = 
-    Memo.memo (fun (ind, typ) ->
-        let sym = mk_symbol srk (typ :> typ) in
-        BatHashtbl.add decapture_tbl sym ind;
-        mk_const srk sym)
-  in
-  let phi = 
-    substitute
-      srk
-      subst phi
-  in
+let skolemize_eh srk _ phi =
   let rec subst_existentials subst_lst syms expr =
     match Formula.destruct srk expr with
     | `Quantify (`Exists, name, typ, phi) ->
@@ -1013,8 +993,10 @@ let skolemize_eh srk phi =
       (* TODO: make substitute more efficient *)
       substitute
         srk
-        (fun (i, _) -> 
-           mk_const srk (List.nth subst_lst i))
+        (fun (i, typ) ->
+           if List.length subst_lst > i 
+           then mk_const srk (List.nth subst_lst i)
+           else mk_var srk (i - List.length subst_lst) typ)
         (Formula.construct srk open_form),
       syms
   in
@@ -1029,8 +1011,10 @@ let skolemize_eh srk phi =
 
 let skolemize_eh_chc srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
-  Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
-      let phi', syms = skolemize_eh srk constr in
+  Fp.mapi_rules (fun ind (conc, hypo, constr) ->
+      let fvs = ref 0 in
+      iter_fvs (fun _ _ _ -> fvs := !fvs + 1) (conc :: hypo);
+      let phi', syms = skolemize_eh srk !fvs constr in
       BatHashtbl.add skolemized_vars ind syms;
       conc, hypo, phi')
     fp
@@ -1079,21 +1063,22 @@ let skolemize_eh_chc srk fp =
 
 
 let offset_analysis srk fp =
-
   let skolemized_vars = BatHashtbl.create 97 in
   let fp' = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
-        let phi', syms = skolemize_eh srk constr in
+        let phi', syms = skolemize_eh srk 0 constr in
         BatHashtbl.add skolemized_vars ind syms;
         conc, hypo, phi')
       fp
   in
+ 
   let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
     determine_offsets srk fp'
   in
   let fp'' = 
-    apply_offset_candidates_new srk fp cell_to_offsets chcvar_to_cell sym_to_cell 
+    apply_offset_candidates_new srk fp' cell_to_offsets chcvar_to_cell sym_to_cell 
   in
+ 
 
   (* Unskolemize *)
   (* try some of the exist quant generalization functions *)
