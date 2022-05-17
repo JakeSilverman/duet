@@ -5,7 +5,7 @@ open Test_pervasives
 open Chc
 open Iteration
 
-let pd = (module QLIALift(Product(LinearRecurrenceInequation)(PolyhedronGuard)) :
+let pd = (module Product(LossyTranslation)(PolyhedronGuard) :
   PreDomain)
 (*
 let typ_symbol_fo srk sym =

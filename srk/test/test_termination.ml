@@ -2,7 +2,7 @@ open Srk
 open Syntax
 open OUnit
 open Test_pervasives
-
+open BatPervasives
 
 let tr_symbols = [(wsym,wsym');(xsym,xsym');(ysym,ysym');(zsym,zsym')]
 
@@ -10,7 +10,7 @@ let mp_exp =
   let all_sym = (List.map fst tr_symbols)@(List.map snd tr_symbols) in
   fun tr_symbols phi ->
   TerminationExp.mp
-    (module Iteration.LinearRecurrenceInequation)
+    (module Iteration.LossyTranslation)
     srk
     (TransitionFormula.make
        ~exists:(fun sym -> List.mem sym all_sym)
@@ -62,8 +62,12 @@ let assert_equal_pz x y =
     ~cmp:Sequence.Periodic.equal 
     ~printer:(SrkUtil.mk_show (Sequence.Periodic.pp Format.pp_print_int)) x y
 
-let mp_dta tf =
-  mk_not srk (TerminationDTA.XSeq.terminating_conditions_of_formula_via_xseq srk tf)
+let assert_equal_pq x y =
+  assert_equal 
+    ~cmp:Sequence.Periodic.equal 
+    ~printer:(SrkUtil.mk_show (Sequence.Periodic.pp QQ.pp)) x y
+
+let mp_dta tf = TerminationDTA.mp srk tf
 
 let suite = "Termination" >::: [
       "even" >:: (fun () ->
@@ -174,12 +178,21 @@ let suite = "Termination" >::: [
         assert_bool "No LLRF" (not (TerminationLLRF.has_llrf srk phi));
         assert_implies expected_cond (mp_llrf_with_phase phi)
       );
+      "char_seq_of_qq_poly_mod1" >:: (fun () ->
+        let p = (* 1/3x *)
+          Polynomial.QQX.of_list [(QQ.of_frac 1 3, 1)]
+        in
+        assert_equal_pq
+          (TerminationDTA.XSeq.seq_of_polynomial 2 p) 
+          (Sequence.Periodic.make
+             (List.map (fun i -> QQ.of_frac i 3) (BatList.of_enum (0 -- 5))))
+      );
       "char_seq_of_poly_mod" >:: (fun () ->
         let p = mk_qqx [1; 2; 1] in
         (* n^2 + 2n + 1 mod 5 *)
-        assert_equal_pz 
+        assert_equal_pq
           (TerminationDTA.XSeq.seq_of_polynomial 5 p) 
-          (Sequence.Periodic.make [1; 4; 4; 1; 0])
+          (Sequence.Periodic.make (List.map QQ.of_int [1; 4; 4; 1; 0]))
       );
       "char_seq_of_exp_poly" >:: (fun () ->
         let p = ExpPolynomial.of_exponential (QQ.of_int 2) in 
@@ -190,9 +203,12 @@ let suite = "Termination" >::: [
         let ep2 = ExpPolynomial.mul r s in
         let ep = ExpPolynomial.add ep1 ep2 in
         (* 2^n (n + 1) + 3^n (n^2) mod 5 *)
-        assert_equal_pz 
+        assert_equal_pq
           (TerminationDTA.XSeq.seq_of_exp_polynomial 5 ep) 
-          (Sequence.Periodic.make [1; 7; 3; 5; 1; 2; 7; 7; 8; 3; 4; 3; 7; 5; 4; 3; 3; 3; 2; 2])
+          (Sequence.Periodic.make
+             (List.map
+                (fun i -> QQ.modulo (ExpPolynomial.eval ep i) (QQ.of_int 5))
+                (BatList.of_enum (0 -- 19))))
       );
       "dta_omega_dom" >:: (fun () ->
         let tf =
@@ -202,7 +218,7 @@ let suite = "Termination" >::: [
           [(xsym,xsym')]
         in
         let expected_cond = mk_not srk (mk_eq srk x (mk_zero srk)) in
-        assert_implies expected_cond (mp_dta tf)
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
       "dta_cmp_0_atom_negative_coeff" >:: (fun () ->
         let tf =
@@ -212,7 +228,7 @@ let suite = "Termination" >::: [
           [(xsym,xsym');(ysym,ysym')]
         in
         let expected_cond = mk_true srk in
-        assert_implies expected_cond (mp_dta tf)
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
       "dta_cmp_0_atom_poly" >:: (fun () ->
         let tf =
@@ -224,7 +240,7 @@ let suite = "Termination" >::: [
         let expected_cond = mk_or srk 
           [ mk_and srk [mk_lt srk x (mk_zero srk); mk_leq srk y (mk_zero srk)]; 
             mk_lt srk y (mk_zero srk)] in
-        assert_implies expected_cond (mp_dta tf)
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
       "dta_divisibility_atom" >:: (fun () ->
         let tf =
@@ -242,7 +258,7 @@ let suite = "Termination" >::: [
             (mk_mod srk (mk_add srk [x; mk_mul srk [(mk_int srk 2); y]]) (mk_int srk 3)) 
             (mk_zero srk);
           ]) in
-        assert_implies expected_cond (mp_dta tf)
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
       "dta_conjunction" >:: (fun () ->
         let tf =
@@ -251,14 +267,8 @@ let suite = "Termination" >::: [
           Infix.( ( x mod int 3 = int 0 && int 0 <= y) && y' = y - z && x' = x + int 2 && z' = z)
           [(xsym,xsym');(ysym,ysym');(zsym, zsym')]
         in
-        let expected_cond = mk_or srk [
-          mk_not srk (mk_and srk [
-            mk_eq srk (mk_mod srk x (mk_int srk 3)) (mk_zero srk);
-            mk_eq srk (mk_mod srk (mk_add srk [x; mk_int srk 1]) (mk_int srk 3)) (mk_zero srk);
-            mk_eq srk (mk_mod srk (mk_add srk [x; mk_int srk 2]) (mk_int srk 3)) (mk_zero srk);
-          ]); 
-          mk_lt srk (mk_zero srk) z] in
-        assert_implies expected_cond (mp_dta tf)
+        let expected_cond = mk_true srk in
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
       "dta_disjunction" >:: (fun () ->
         let tf =
@@ -267,7 +277,10 @@ let suite = "Termination" >::: [
           Infix.( ((int 0) <= x || int 0 <= y) && y' = y - z && x' = x - z && z' = z)
           [(xsym,xsym');(ysym,ysym');(zsym, zsym')]
         in
-        let expected_cond = mk_lt srk (mk_zero srk) z in
-        assert_implies expected_cond (mp_dta tf)
+        let expected_cond =
+          Infix.((int 0) < z
+                 || ((int 0) = z && x < (int 0) && y < (int 0)))
+        in
+        assert_equiv_formula expected_cond (mp_dta tf)
       );
     ]

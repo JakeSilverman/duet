@@ -28,6 +28,7 @@ let termination_dta = ref true
 let termination_phase_analysis = ref true
 let precondition = ref false
 let termination_attractor = ref true
+let termination_prenex = ref true
 
 let dump_goal loc path_condition =
   if !dump_goals then begin
@@ -813,14 +814,14 @@ let omega_algebra = function
          let dta =
            (* If LLRF succeeds, then we do not try dta *)
            if (not has_llrf) && !termination_dta then
-             [TDTA.XSeq.terminating_conditions_of_formula_via_xseq srk tf]
+             [mk_not srk (TDTA.mp srk tf)]
            else []
          in
          let exp =
            if (not has_llrf) && !termination_exp then
              let mp =
                Syntax.mk_not srk
-                 (TerminationExp.mp (module Iteration.LinearRecurrenceInequation) srk tf)
+                 (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
              in
              let dta_entails_mp =
                (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
@@ -837,6 +838,23 @@ let omega_algebra = function
          let result =
            Syntax.mk_and srk (llrf@dta@exp)
          in
+         let file = get_gfile () in
+         if !dump_goals
+            && result <> (Syntax.mk_true srk)
+            && result <> (Syntax.mk_false srk) then begin
+             let filename =
+               Format.sprintf "%s-%d-term.smt2"
+                 (Filename.chop_extension (Filename.basename file.filename))
+                 (!nb_goals)
+          in
+          let chan = Stdlib.open_out filename in
+          let formatter = Format.formatter_of_out_channel chan in
+          logf ~level:`always "Writing goal formula to %s" filename;
+          Syntax.pp_smtlib2 srk formatter result;
+          Format.pp_print_newline formatter ();
+          Stdlib.close_out chan;
+          incr nb_goals
+           end;
          match Quantifier.simsat srk result with
          | `Unsat -> mk_false srk
          | _ -> result
@@ -937,9 +955,26 @@ let prove_termination_main file =
       let query = mk_query ts entry in
       let omega_paths_sum =
         TS.omega_path_weight query omega_algebra
-        |> lift_universals srk
+        |> (if !termination_prenex
+            then lift_universals srk
+            else fun x -> x)
         |> SrkSimplify.simplify_terms srk
       in
+      if !dump_goals
+         && omega_paths_sum <> (Syntax.mk_true srk)
+         && omega_paths_sum <> (Syntax.mk_false srk) then begin
+          let filename =
+            Format.sprintf "%s-%d-term.smt2"
+              (Filename.chop_extension (Filename.basename file.filename))
+              (!nb_goals)
+          in
+          let chan = Stdlib.open_out filename in
+          let formatter = Format.formatter_of_out_channel chan in
+          logf ~level:`always "Writing goal formula to %s" filename;
+          Syntax.pp_smtlib2 srk formatter omega_paths_sum;
+          Format.pp_print_newline formatter ();
+          Stdlib.close_out chan
+        end;
       match Quantifier.simsat srk omega_paths_sum with
       | `Sat ->
          Format.printf "Cannot prove that program always terminates\n";
@@ -1067,17 +1102,17 @@ let _ =
          if !monotone then
            K.domain := (module Product
                                  (Product(Vas.Monotone)(PolyhedronGuard))
-                                 (LinearRecurrenceInequation))
+                                 (LossyTranslation))
          else
            K.domain := (module Product
                                  (Product(Vas)(PolyhedronGuard))
-                                 (LinearRecurrenceInequation))),
+                                 (LossyTranslation))),
      " Use VAS abstraction");
   CmdLine.register_config
     ("-cra-vass",
      Arg.Unit (fun () ->
          let open Iteration in
-         K.domain := (module Product(Product(LinearRecurrenceInequation)(PolyhedronGuard))(Vass))),
+         K.domain := (module Product(Product(LossyTranslation)(PolyhedronGuard))(Vass))),
      " Use VASS abstraction");
   CmdLine.register_config
     ("-dump-goals",
@@ -1088,7 +1123,7 @@ let _ =
      Arg.Unit (fun () ->
          let open Iteration in
          monotone := true;
-         K.domain := (module Product(LinearRecurrenceInequation)(PolyhedronGuard))),
+         K.domain := (module Product(LossyTranslation)(PolyhedronGuard))),
      " Disable non-monotone analysis features");
   CmdLine.register_config
     ("-termination-no-exp",
@@ -1110,6 +1145,10 @@ let _ =
      ("-termination-no-attractor",
       Arg.Clear termination_attractor,
       " Disable attractor region computation for LLRF");
+  CmdLine.register_config
+     ("-termination-no-prenex",
+      Arg.Clear termination_prenex,
+      " Disable prenex conversion");
   CmdLine.register_config
     ("-precondition",
      Arg.Clear precondition,
