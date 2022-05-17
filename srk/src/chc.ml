@@ -158,7 +158,7 @@ module Fp = struct
           (mk_and srk [phix'; phiy'])
           p_hy
       in
-      let phi' = Quantifier.eq_guided_qe srk phi' in
+      (*let phi' = Quantifier.eq_guided_qe srk phi' in*)
       Edge (p_cy, p_hx, phi')
 
   let star srk pd x =

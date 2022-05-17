@@ -6,6 +6,10 @@ type vars = Sym of symbol | Fv of int
 
 val skolemize : 'a context -> 'a formula -> 'a formula
 val skolemize_chc : 'a context -> 'a fp -> 'a fp
+val skolemize_eh :
+  'a Syntax.context ->
+  'b ->
+  'a Syntax.Formula.t -> 'a Syntax.formula * Syntax.Symbol.Set.t
 val skolemize_eh_chc : 'a context -> 'a fp -> 'a fp
 val prenex_chc : 'a context -> 'a fp -> 'a fp
 val check_q_array_chc : 'a context -> 'a fp -> 'a fp

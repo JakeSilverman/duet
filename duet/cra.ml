@@ -1152,7 +1152,28 @@ let array_analyze file =
   (*let _ = determine_offsets srk fp in*)
   Log.errorf "DONE DETERMINING OFFSET CANDS";
  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
- 
+  let phi = Chc.Fp.query_vc_condition srk fp ad in
+  Log.errorf "VC FOUND %a" (Syntax.Formula.pp srk) phi;
+  (*Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDINIT.smt2";*)
+  let phi = Pmfa.eliminate_stores srk phi in
+  let phi = Syntax.eliminate_ite srk phi in
+
+  let trs = [] in
+  let tf = TransitionFormula.make phi trs in
+  let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in
+  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
+  (*let lia = Quantifier.eq_guided_qe srk lia in*)
+  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/final_lia.smt2";
+
+  match Quantifier.simsat srk lia with
+  | `Unsat  -> 
+    logf ~level:`always "Safe"
+
+  | `Unknown -> logf ~level:`always "UnknownREAL"
+  | `Sat -> 
+    logf ~level:`always "UnknownSAT"
+
+
   (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
   let fp = Pmfa.elim_ite_chc srk fp in
  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
@@ -1205,7 +1226,6 @@ let fp = Pmfa.eq_guided_bool_only_chc srk fp in
   Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   let _ = Pmfa.check_q_array_chc srk fp in
   let (*classes, rules_classes*) _ = Pmfa.pmfa_chc_offset_partitioning srk fp in*)
-  logf ~level:`always "Safe"
   (*Log.errorf "offset";
   let cands = Pmfa.propose_offset_candidates_seahorn srk fp classes in
   Log.errorf "PROPOSED";
