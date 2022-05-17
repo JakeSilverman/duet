@@ -1219,7 +1219,7 @@ module ArrTerm = struct
     | Node (Var (v, `TyArr), [], _) -> `Var (v, `TyArr)
     | Node (Ite, [cond; bthen; belse], `TyArr) -> `Ite (cond, bthen, belse)
     | Node (Store, [a; i; v], _) -> `Store (a, i ,v)
-    | _ -> invalid_arg "destruct: not a term"
+    | _ -> invalid_arg "destruct: not a term5"
 
   let construct _srk open_term = match open_term with
     | `App(func, args) -> mk_app _srk func args
