@@ -1459,7 +1459,7 @@ let _ =
          | th -> failwith ("Unrecognized theory: " ^ th)),
      " Set background theory (LIRA, LIRR)")
 
-let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard))(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
 
  let time _ =
     let t = Unix.gettimeofday () in
@@ -1496,18 +1496,31 @@ let array_analyze file =
   (*let _ = determine_offsets srk fp in*)
   Log.errorf "DONE DETERMINING OFFSET CANDS";
  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
-  let phi = Chc.Fp.query_vc_condition srk fp ad in
-  Log.errorf "VC FOUND %a" (Syntax.Formula.pp srk) phi;
+
+
+  
+    let phi = Chc.Fp.query_vc_condition srk fp ad in
+  Syntax.to_file srk phi "/users/jakesilverman/documents/arraysmttests/vccond.smt2";
+
   (*Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDINIT.smt2";*)
+
+  
+  let phi = Syntax.eliminate_ite srk phi in
+  let phi =
+    Quantifier.eq_guided_qe 
+      srk
+      (Quantifier.miniscope srk phi)
+  in
+
   let phi = Pmfa.eliminate_stores srk phi in
   let phi = Syntax.eliminate_ite srk phi in
-
+ 
   let trs = [] in
   let tf = TransitionFormula.make phi trs in
   let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in
   let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
   (*let lia = Quantifier.eq_guided_qe srk lia in*)
-  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/final_lia.smt2";
+  Syntax.to_file srk lia "/users/jakesilverman/documents/arraysmttests/final_lia.smt2";
 
   match Quantifier.simsat srk lia with
   | `Unsat  -> 
