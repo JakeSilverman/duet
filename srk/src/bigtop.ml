@@ -31,7 +31,7 @@ let load_math_formula filename =
 let load_smtlib2 filename =
   SrkZ3.load_smtlib2 srk (Bytes.to_string (file_contents filename))
 
-let load_chc fp filename = Chc.ChcSrkZ3.parse_file srk fp filename
+(*let load_chc fp filename = Chc.ChcSrkZ3.parse_file srk filename fp*)
 
 
 let load_formula filename =
@@ -214,7 +214,7 @@ let spec_list = [
    ],
    " Generate a random formula");
 
-  ("-chc",
+  (*("-chc",
    Arg.String (fun file ->
        let open Iteration in
        let fp = Chc.Fp.create () in
@@ -237,7 +237,7 @@ let spec_list = [
             phi)
          Format.std_formatter
          (Chc.Relation.Set.enum rels)),
-   " Output solution to system of constrained horn clauses");
+   " Output solution to system of constrained horn clauses");*)
 
   ("-verbosity",
    Arg.String (fun v -> Log.verbosity_level := (Log.level_of_string v)),

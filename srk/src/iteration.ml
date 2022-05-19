@@ -247,7 +247,7 @@ module GuardedTranslation = struct
     in
     (* [1, x0' - x0, ..., xn' - xn] *)
     let delta =
-      [mk_one srk]
+      [mk_sub srk (mk_zero srk) (mk_one srk)]
       @(List.map (fun (s,s') ->
             mk_sub srk (mk_const srk s') (mk_const srk s))
           zz_symbols)
