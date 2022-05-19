@@ -865,7 +865,7 @@ let pos_bool_elim srk phi syms =
        else mk_const srk s)
     phi
 
-
+(*
 let check_quants srk constr =
   let print = ref false in
   let alg = function
@@ -876,7 +876,7 @@ let check_quants srk constr =
   Formula.eval srk alg constr;
   if !print then
     Log.errorf "Constr with quant is %a \n" (Formula.pp srk) constr
-  else ()
+  else ()*)
 
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
@@ -924,14 +924,14 @@ let offset_analysis srk fp =
       fp'3
   in
 
-
+(*
   let fp'3 = 
     Fp.map_rules (fun (conc, hypo, constr) ->
         check_quants srk constr; 
         conc, hypo, constr)
       fp'3
   in
-
+*)
 
   (* try some of the exist quant generalization functions *)
 
@@ -1299,13 +1299,13 @@ module OldPmfa = struct
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
           obj.iter_trs
       in
-      Syntax.to_file srk nstarwnstar "/users/jakesilverman/documents/arraysmttests/nstarwnstar.smt2";
+      let nstarwnstar = 
+        Quantifier.eq_guided_qe 
+          srk
+          (Quantifier.miniscope srk nstarwnstar)
+      in
 
-      Syntax.to_file srk obj.ground_lia "/users/jakesilverman/documents/arraysmttests/ground_lia.smt2";
-
-
-
-      let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
+      (*let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in*)
 
       let nstar =
         Iter2.exp
@@ -1316,16 +1316,6 @@ module OldPmfa = struct
               srk 
               noop)
       in
-
-
-      (List.iter (fun (s1, s2) ->
-           Log.errorf "Iter trs include %a, %a\n" (pp_symbol srk) s1 (pp_symbol srk) s2)
-          obj.iter_trs);
-      Log.errorf "Loop counter is %a\n" (ArithTerm.pp srk) lc;
-      Log.errorf "SINGLE ITER is %a \n" (Formula.pp srk) (T.formula noop);
-
-
-      Log.errorf "ABSTRACT is %a \n" (Iter2.pp srk obj.iter_trs) (Iter2. abstract srk noop);
 
       let exp_res_pre = 
         mk_or 
@@ -1344,9 +1334,6 @@ module OldPmfa = struct
       in
       let substed = substitute_const srk map exp_res_pre in
       let res = (mk_forall srk `TyInt substed) in
-      Syntax.to_file srk  res "/users/jakesilverman/documents/arraysmttests/expfinal.smt2";
-
-
       res
 
     let pp _ _ _= failwith "todo 10"
