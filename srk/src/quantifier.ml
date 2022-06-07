@@ -2479,7 +2479,6 @@ let miniscope srk phi : 'a formula =
 let get_subst_candidate srk eqs qt_infos = 
   let candidates = 
     List.filter_map (fun (t1, t2) ->
-        Log.errorf "seeking cands of term %a and %a" (Term.pp srk) t1 (Term.pp srk) t2;
         match Term.destruct srk t1, Term.destruct srk t2 with
         | `Var(ind, _), _ when ind < List.length qt_infos ->
           assert (ind >= 0);
@@ -2496,50 +2495,44 @@ let get_subst_candidate srk eqs qt_infos =
   if List.length candidates = 0 then None
   else Some (List.hd candidates)
 
-let eg_simplification _ _ = assert false
-
 let eq_guided_qe srk phi =
-  (* TODO: improve intersect *)
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
   let apply_quant_block block eqs diseqs fv_tru fv_fls phi =
-    List.iter (fun (t1, t2) ->
-        Log.errorf "term is %a to %a" (Term.pp srk) t1 (Term.pp srk) t2)
-      eqs;
     match block with
     | None -> eqs, diseqs, fv_tru, fv_fls, phi
     | Some (qtyp, qt_infos) ->
-
       let qt_infos = List.rev qt_infos in
-      (* TODO: bools *)
       let q_fun, cand_lst = 
         if qtyp = `Forall then mk_forall, diseqs else mk_exists, eqs
       in
+      let subst phi subst_ind cand_term =
+        substitute srk (fun (ind, typ) ->
+            if ind = subst_ind then cand_term
+            else if ind > subst_ind then mk_var srk (ind - 1) typ
+            else mk_var srk ind typ)
+          phi
+      in
       let perform_bool_substs =
-        BatList.fold_lefti (fun (eqs, diseqs, phi) subst_ind (_, typ) ->
-            let subst phi cand_term =
-              substitute srk (fun (ind, typ) ->
-                  if ind = subst_ind then cand_term
-                  else if ind > subst_ind then mk_var srk (ind - 1) typ
-                  else mk_var srk ind typ)
-                phi
-            in
-            let sub_pairs lst cand_term = 
+        BatList.fold_lefti (fun (eqs, diseqs, phi) ind (_, typ) ->
+            let sub_pairs lst term = 
               List.map
-                (fun (t1, t2) -> subst t1 cand_term, subst t2 cand_term) 
+                (fun (t1, t2) -> subst t1 ind term , subst t2 ind term)
                 lst
             in
             if typ = `TyBool then (
-              if BatSet.Int.mem subst_ind fv_tru then (
+              if BatSet.Int.mem ind fv_tru &&
+                 not (BatSet.Int.mem ind fv_fls) then (
                 let cand_term = mk_true srk in
-                let phi' = subst cand_term phi in
+                let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
                 (eqs', diseqs',  phi') 
               )
-              else if BatSet.Int.mem subst_ind fv_fls then (
+              else if BatSet.Int.mem ind fv_fls &&
+                      not (BatSet.Int.mem ind fv_tru) then (
                 let cand_term = mk_false srk in
-                let phi' = subst cand_term phi in
+                let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
                 (eqs', diseqs',  phi') 
@@ -2577,66 +2570,54 @@ let eq_guided_qe srk phi =
           in
           let eqs_filt = filter_pairs eqs in
           let diseqs_filt = filter_pairs diseqs in
-          let subst phi =
+          let shift_terms phi =
             substitute srk (fun (ind, typ) ->
                 mk_var srk (ind - (List.length qt_infos)) typ)
               phi
           in
           let sub_pairs lst = 
             List.map
-              (fun (t1, t2) -> subst t1, subst t2) 
+              (fun (t1, t2) -> shift_terms t1, shift_terms t2) 
               lst
           in
           let eqs' = sub_pairs eqs_filt in
           let diseqs' = sub_pairs diseqs_filt in
           eqs', diseqs', fv_tru', fv_fls', phi' 
-        | Some (subst_ind, cand_term) ->
-          let cand_term =
-            substitute srk (fun (ind, typ) ->
-                if ind = subst_ind then assert false
-                else if ind > subst_ind then mk_var srk (ind - 1) typ
-                else mk_var srk ind typ)
-              cand_term
-          in
-
-          let subst phi =
-            substitute srk (fun (ind, typ) ->
-                if ind = subst_ind then cand_term
-                else if ind > subst_ind then mk_var srk (ind - 1) typ
-                else mk_var srk ind typ)
-              phi
-          in
+        | Some (ind, term) ->
+          (* mk_false should never be substitutable here *)
+          let term' = subst term ind (mk_false srk) in
           let sub_pairs lst = 
             List.map
-              (fun (t1, t2) -> subst t1, subst t2) 
+              (fun (t1, t2) -> subst t1 ind term', subst t2 ind term') 
               lst
           in
           let eqs' = sub_pairs eqs in
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
-          let phi' = subst phi in
-
+          let phi' = subst phi ind term' in
           perform_subst
             cands'
-            (BatList.remove_at subst_ind qt_infos)
+            (BatList.remove_at ind qt_infos)
             eqs'
             diseqs'
             phi'
       in
-      perform_subst cand_lst qt_infos eqs diseqs phi 
+      perform_subst cand_lst qt_infos eqs diseqs phi
   in
+  let emp = BatSet.Int.empty in
   let alg = function
-    | `Tru -> None, [], [], BatSet.Int.empty, BatSet.Int.empty, mk_true srk
-    | `Fls -> None, [], [], BatSet.Int.empty, BatSet.Int.empty, mk_false srk
+    | `Tru -> None, [], [], emp, emp, mk_true srk
+    | `Fls -> None, [], [], emp, emp, mk_false srk
     | `Atom (`Arith (`Eq, x, y)) -> 
-      None, [(x :> 'a term), (y :> 'a term)], [], BatSet.Int.empty, BatSet.Int.empty, mk_eq srk x y
+      None, [(x :> 'a term), (y :> 'a term)], [], emp, emp, mk_eq srk x y
     | `Atom (`ArrEq (a, b)) ->
-      None, [(a :> 'a term), (b :> 'a term)], [], BatSet.Int.empty, BatSet.Int.empty, mk_arr_eq srk a b
-    | `Atom (`Arith (`Lt, x, y)) -> None, [], [], BatSet.Int.empty, BatSet.Int.empty, mk_lt srk x y
-    | `Atom (`Arith (`Leq, x, y)) -> None, [], [], BatSet.Int.empty, BatSet.Int.empty, mk_leq srk x y
+      None, [(a :> 'a term), (b :> 'a term)], [], emp, emp, mk_arr_eq srk a b
+    | `Atom (`Arith (`Lt, x, y)) -> None, [], [], emp, emp, mk_lt srk x y
+    | `Atom (`Arith (`Leq, x, y)) -> None, [], [], emp, emp, mk_leq srk x y
     | `And conjuncts ->
       let (eqs, diseqs, fv_trus, fv_flss, conjs) = 
-        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, conjs) (block, eq, diseq, fv_tru, fv_fls, phi) ->
+        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, conjs) 
+                         (block, eq, diseq, fv_tru, fv_fls, phi) ->
             let eq', diseq', fv_tru', fv_fls', phi' = 
               apply_quant_block block eq diseq fv_tru fv_fls phi
             in
@@ -2644,102 +2625,48 @@ let eq_guided_qe srk phi =
             BatSet.Int.union fv_trus fv_tru', 
             BatSet.Int.union fv_flss fv_fls',
             phi' :: conjs)
-          ([], [], BatSet.Int.empty, BatSet.Int.empty, [])
+          ([], [], emp, emp, [])
           conjuncts
       in
       None, union eqs, intersect diseqs, fv_trus, fv_flss, mk_and srk conjs
     | `Or disjuncts ->
-       let (eqs, diseqs, fv_trus, fv_flss, disjs) = 
-        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, disjs) (block, eq, diseq, fv_tru, fv_fls, disj) ->
+      let (eqs, diseqs, fv_trus, fv_flss, disjs) = 
+        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, disjs) 
+                         (block, eq, diseq, fv_tru, fv_fls, disj) ->
              let eq', diseq', fv_tru', fv_fls', phi' = 
                apply_quant_block block eq diseq fv_tru fv_fls disj
              in
-             eq' :: eqs, diseq' :: diseqs, 
-            BatSet.Int.inter fv_trus fv_tru', 
-            BatSet.Int.inter fv_flss fv_fls',
-            phi' :: disjs)
-          ([], [], BatSet.Int.empty, BatSet.Int.empty, [])
+             eq' :: eqs, diseq' :: diseqs,
+             (* Why should this be union *)
+             BatSet.Int.union fv_trus fv_tru', 
+             BatSet.Int.union fv_flss fv_fls',
+             phi' :: disjs)
+          ([], [], emp, emp, [])
           disjuncts
-      in
-      None, intersect eqs, union diseqs, fv_trus, fv_flss, mk_or srk disjs
-    (*| `Quantify (qtyp, name, `TyBool, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
-      let q_fun = 
-        if qtyp = `Forall then mk_forall else mk_exists
-      in
-      let subst ind0 phi =
-        substitute srk (fun (ind, typ) ->
-            if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
-          phi
-      in
-      let sub_pairs ind0 lst = 
-        List.map
-          (fun (t1, t2) -> subst ind0 t1, subst ind0 t2) 
-          lst
-      in
-      if BatSet.Int.mem 0 fv_tru && qtyp = `Exists then (
-        let t' _ = mk_true srk in
-        let phi' = subst t' phi in
-        let eqs = sub_pairs t' eqs in
-        let diseqs = sub_pairs t' diseqs in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-
-       (eqs, diseqs, fv_tru', fv_fls', phi') 
-      )
-      else if BatSet.Int.mem 0 fv_fls && qtyp = `Exists then (
-        let t' _ = mk_false srk in
-        let phi' = subst t' phi in
-        let eqs = sub_pairs t' eqs in
-        let diseqs = sub_pairs t' diseqs in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        (eqs, diseqs, fv_tru', fv_fls', phi') 
-      )
-      else (
-        let filter_pairs lst = 
-          List.filter (fun (t1, t2) ->
-              (not (Hashtbl.mem (free_vars t1) 0)) &&
-              (not (Hashtbl.mem (free_vars t2) 0)))
-            lst
-        in
-        let fls _ = assert false in
-        let eqs = sub_pairs fls (filter_pairs eqs) in
-        let diseqs = sub_pairs fls (filter_pairs diseqs) in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        let phi' = q_fun srk ~name `TyBool phi in
-        eqs, diseqs, fv_tru', fv_fls', phi'
-      )*)
+       in
+       None, intersect eqs, union diseqs, fv_trus, fv_flss, mk_or srk disjs
     | `Quantify (qtyp, name, typ, (block, eqs, diseqs, fv_tru, fv_fls, phi)) ->
       begin match block with
-      | None -> Some (qtyp, [(name, typ)]), eqs, diseqs, fv_tru, fv_fls, phi
-      | Some (qtypblock, qinfos) ->
-        if qtyp = qtypblock then ( 
-          Some (qtypblock, (name, typ) :: qinfos), eqs, diseqs, fv_tru, fv_fls, phi)
-        else (
-          let eq', diseq', fv_tru', fv_fls', phi' = 
-            apply_quant_block block eqs diseqs fv_tru fv_fls phi
-          in
-          Some(qtyp, [(name, typ)]), eq', diseq', fv_tru', fv_fls', phi')
+        | None -> Some (qtyp, [(name, typ)]), eqs, diseqs, fv_tru, fv_fls, phi
+        | Some (qtypblock, qinfos) ->
+          if qtyp = qtypblock then ( 
+            Some (qtypblock, (name, typ) :: qinfos), eqs, diseqs, fv_tru, fv_fls, phi)
+          else (
+            let eq', diseq', fv_tru', fv_fls', phi' = 
+              apply_quant_block block eqs diseqs fv_tru fv_fls phi
+            in
+            Some(qtyp, [(name, typ)]), eq', diseq', fv_tru', fv_fls', phi')
       end
-   | `Not (block, eqs, diseqs, fv_trus, fv_flss, phi) -> 
-     let eq', diseq', fv_tru', fv_fls', phi' = 
+    | `Not (block, eqs, diseqs, fv_trus, fv_flss, phi) -> 
+      let eq', diseq', fv_tru', fv_fls', phi' = 
        apply_quant_block block eqs diseqs fv_trus fv_flss phi
      in
      None, diseq', eq', fv_fls', fv_tru', mk_not srk phi'
-    | `Proposition (`Var ind) -> (None, [], [], BatSet.Int.singleton ind, BatSet.Int.empty, mk_var srk ind `TyBool) 
-    | `Proposition (`App (f, args)) -> (None, [], [], BatSet.Int.empty, BatSet.Int.empty, mk_app srk f args)
-    | `Ite ((block1, eq1, diseq1, fv_tru1, fv_fls1, cond), (block2, eq2, diseq2, fv_tru2, fv_fls2, bthen), (block3, eq3, diseq3, fv_tru3, fv_fls3, belse)) ->
-     let _, _, _, _, cond' = 
-       apply_quant_block block1 eq1 diseq1 fv_tru1 fv_fls1 cond
-     in
-     let eq2', diseq2', fv_tru2', fv_fls2', bthen' = 
-       apply_quant_block block2 eq2 diseq2 fv_tru2 fv_fls2 bthen
-     in
-     let eq3', diseq3', fv_tru3', fv_fls3', belse' = 
-       apply_quant_block block3 eq3 diseq3 fv_tru3 fv_fls3 belse
-     in
-      None, intersect [eq2'; eq3'], diseq2' @ diseq3', BatSet.Int.inter fv_tru2' fv_tru3', BatSet.Int.inter fv_fls2' fv_fls3', mk_ite srk cond' bthen' belse'
+    | `Proposition (`Var ind) -> 
+      (None, [], [], BatSet.Int.singleton ind, emp, mk_var srk ind `TyBool) 
+    | `Proposition (`App (f, args)) -> 
+      (None, [], [], emp, emp, mk_app srk f args)
+    | `Ite _ -> assert false (* TODO: I think prev vers had bug with inter *)
     | _ -> assert false
   in
   let block, eqs, diseqs, fv_tru, fv_fls, phi2 = Formula.eval srk alg phi in
@@ -2749,377 +2676,10 @@ let eq_guided_qe srk phi =
 
 
 
-let get_subst_candidate srk eqs = 
-  let candidates = 
-    List.filter_map (fun (t1, t2) ->
-        match Term.destruct srk t1, destruct srk t2 with
-        | `Var(ind, _), _ when ind = 0 ->
-          if not (Hashtbl.mem (free_vars t2) 0)
-          then Some t2
-          else None
-        | _, `Var(ind, _) when ind = 0 -> 
-          if not (Hashtbl.mem (free_vars t1) 0) 
-          then Some t1
-          else None
-        | _, _ ->  None) eqs
-  in
-  if List.length candidates = 0 then None
-  else Some (List.hd candidates)
-
-
-
-
-let eq_guided_qe_old srk phi =
-  (* TODO: improve intersect *)
-  let intersect _ = [] in
-  let union lsts = List.flatten lsts in
-  let alg = function
-    | `Tru -> [], [], BatSet.Int.empty, BatSet.Int.empty, mk_true srk
-    | `Fls -> [], [], BatSet.Int.empty, BatSet.Int.empty, mk_false srk
-    | `Atom (`Arith (`Eq, x, y)) -> 
-      [(x :> 'a term), (y :> 'a term)], [], BatSet.Int.empty, BatSet.Int.empty, mk_eq srk x y
-    | `Atom (`ArrEq (a, b)) ->
-      [(a :> 'a term), (b :> 'a term)], [], BatSet.Int.empty, BatSet.Int.empty, mk_arr_eq srk a b
-    | `Atom (`Arith (`Lt, x, y)) -> [], [], BatSet.Int.empty, BatSet.Int.empty, mk_lt srk x y
-    | `Atom (`Arith (`Leq, x, y)) -> [], [], BatSet.Int.empty, BatSet.Int.empty, mk_leq srk x y
-    | `And conjuncts ->
-      let (eqs, diseqs, fv_trus, fv_flss, conjs) = 
-        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, conjs) (eq, diseq, fv_tru, fv_fls, conj) ->
-            eq :: eqs, diseq :: diseqs, 
-            BatSet.Int.union fv_trus fv_tru, 
-            BatSet.Int.union fv_flss fv_fls,
-            conj :: conjs)
-          ([], [], BatSet.Int.empty, BatSet.Int.empty, [])
-          conjuncts
-      in
-      union eqs, intersect diseqs, fv_trus, fv_flss, `And conjs
-    | `Or disjuncts ->
-       let (eqs, diseqs, fv_trus, fv_flss, disjs) = 
-        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, disjs) (eq, diseq, fv_tru, fv_fls, disj) ->
-            eq :: eqs, diseq :: diseqs, 
-            BatSet.Int.inter fv_trus fv_tru, 
-            BatSet.Int.inter fv_flss fv_fls,
-            disj :: disjs)
-          ([], [], BatSet.Int.empty, BatSet.Int.empty, [])
-          disjuncts
-      in
-      intersect eqs, union diseqs, fv_trus, fv_flss, mk_or srk disjs
-    | `Quantify (qtyp, name, `TyBool, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
-      let q_fun = 
-        if qtyp = `Forall then mk_forall else mk_exists
-      in
-      let subst ind0 phi =
-        substitute srk (fun (ind, typ) ->
-            if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
-          phi
-      in
-      let sub_pairs ind0 lst = 
-        List.map
-          (fun (t1, t2) -> subst ind0 t1, subst ind0 t2) 
-          lst
-      in
-      if BatSet.Int.mem 0 fv_tru && qtyp = `Exists then (
-        let t' _ = mk_true srk in
-        let phi' = subst t' phi in
-        let eqs = sub_pairs t' eqs in
-        let diseqs = sub_pairs t' diseqs in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-
-       (eqs, diseqs, fv_tru', fv_fls', phi') 
-      )
-      else if BatSet.Int.mem 0 fv_fls && qtyp = `Exists then (
-        let t' _ = mk_false srk in
-        let phi' = subst t' phi in
-        let eqs = sub_pairs t' eqs in
-        let diseqs = sub_pairs t' diseqs in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        (eqs, diseqs, fv_tru', fv_fls', phi') 
-      )
-      else (
-        let filter_pairs lst = 
-          List.filter (fun (t1, t2) ->
-              (not (Hashtbl.mem (free_vars t1) 0)) &&
-              (not (Hashtbl.mem (free_vars t2) 0)))
-            lst
-        in
-        let fls _ = assert false in
-        let eqs = sub_pairs fls (filter_pairs eqs) in
-        let diseqs = sub_pairs fls (filter_pairs diseqs) in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        let phi' = q_fun srk ~name `TyBool phi in
-        eqs, diseqs, fv_tru', fv_fls', phi'
-      )
-    | `Quantify (qtyp, name, typ, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
-      let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-      let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-      let q_fun, cand_lst = 
-        if qtyp = `Forall then mk_forall, diseqs else mk_exists, eqs
-      in
-      let subst_term = get_subst_candidate srk cand_lst in
-      (* TODO: Better to just do one big subst at end *)
-      let subst ind0 phi =
-        substitute srk (fun (ind, typ) ->
-          if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
-          phi
-      in
-      let fls _ = assert false in
-      let sub_pairs ind0 lst = 
-        List.map
-          (fun (t1, t2) -> subst ind0 t1, subst ind0 t2) 
-          lst
-      in
-      begin match subst_term with
-      | None ->
-        let filter_pairs lst = 
-          List.filter (fun (t1, t2) ->
-              (not (Hashtbl.mem (free_vars t1) 0)) &&
-              (not (Hashtbl.mem (free_vars t2) 0)))
-          lst
-        in
-        let eqs = sub_pairs fls (filter_pairs eqs) in
-        let diseqs = sub_pairs fls (filter_pairs diseqs) in
-        eqs, diseqs, fv_tru', fv_fls', q_fun srk ~name typ phi
-      | Some t ->
-        let t' _ = subst fls t in
-        let eqs = sub_pairs t' eqs in
-        let diseqs = sub_pairs t' diseqs in
-        eqs, diseqs, fv_tru', fv_fls', subst t' phi
-      end
-    | `Not (eqs, diseqs, fv_trus, fv_flss, phi) -> (diseqs, eqs, fv_flss, fv_trus, mk_not srk phi)
-    | `Proposition (`Var ind) -> ([], [], BatSet.Int.singleton ind, BatSet.Int.empty, mk_var srk ind `TyBool) 
-    | `Proposition (`App (f, args)) -> ([], [], BatSet.Int.empty, BatSet.Int.empty, mk_app srk f args)
-    | `Ite ((_, _, _, _, cond), (eq2, diseq2, fv_tru2, fv_fls2, bthen), (eq3, diseq3, fv_tru3, fv_fls3, belse)) -> 
-      intersect [eq2; eq3], diseq2 @ diseq3, BatSet.Int.inter fv_tru2 fv_tru3, BatSet.Int.inter fv_fls2 fv_fls3, mk_ite srk cond bthen belse
-    | _ -> assert false
-  in
-  let _, _, _, _, phi2 = Formula.eval srk alg phi in
-  phi2
-
-
-
-
-let eq_guided_qe_bool_only srk phi =
-  (* TODO: improve intersect *)
-  let alg = function
-    | `Tru -> BatSet.Int.empty, BatSet.Int.empty, mk_true srk, false
-    | `Fls -> BatSet.Int.empty, BatSet.Int.empty, mk_false srk, false
-    | `Atom (`Arith (`Eq, x, y)) -> 
-      BatSet.Int.empty, BatSet.Int.empty, mk_eq srk x y, false
-    | `Atom (`ArrEq (a, b)) ->
-      BatSet.Int.empty, BatSet.Int.empty, mk_arr_eq srk a b, false
-    | `Atom (`Arith (`Lt, x, y)) -> BatSet.Int.empty, BatSet.Int.empty, mk_lt srk x y, false
-    | `Atom (`Arith (`Leq, x, y)) -> BatSet.Int.empty, BatSet.Int.empty, mk_leq srk x y, false
-    | `And conjuncts ->
-      let (fv_trus, fv_flss, conjs, changed) = 
-        List.fold_left (fun (fv_trus, fv_flss, conjs, changed) (fv_tru, fv_fls, conj, loc_changed) -> 
-            BatSet.Int.union fv_trus fv_tru, 
-            BatSet.Int.union fv_flss fv_fls,
-            conj :: conjs,
-            changed || loc_changed
-          )
-          (BatSet.Int.empty, BatSet.Int.empty, [], false)
-          conjuncts
-      in
-      fv_trus, fv_flss, mk_and srk conjs, changed
-    | `Or disjuncts ->
-       let (fv_trus, fv_flss, disjs, changed) = 
-        List.fold_left (fun (fv_trus, fv_flss, disjs, changed) (fv_tru, fv_fls, disj, loc_changed) ->
-            BatSet.Int.inter fv_trus fv_tru, 
-            BatSet.Int.inter fv_flss fv_fls,
-            disj :: disjs,
-           changed || loc_changed)
-          (BatSet.Int.empty, BatSet.Int.empty, [], false)
-          disjuncts
-      in
-      fv_trus, fv_flss, mk_or srk disjs, changed
-    | `Quantify (qtyp, name, `TyBool, (fv_tru, fv_fls, phi, changed)) ->
-      BatSet.Int.iter (fun ele -> Log.errorf "set contains %n" ele) fv_tru;
-      let q_fun = 
-        if qtyp = `Forall then mk_forall else mk_exists
-      in
-      let subst ind0 phi =
-        substitute srk (fun (ind, typ) ->
-            if ind = 0 then (ind0 ()) else mk_var srk (ind - 1) typ)
-          phi
-      in
-      if BatSet.Int.mem 0 fv_tru && qtyp = `Exists then (
-        let t' _ = mk_true srk in
-        let phi' = subst t' phi in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-
-       (fv_tru', fv_fls', phi', true) 
-      )
-      else if BatSet.Int.mem 0 fv_fls && qtyp = `Exists then (
-        let t' _ = mk_false srk in
-        let phi' = subst t' phi in
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        (fv_tru', fv_fls', phi', true) 
-      )
-      else (
-        let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-        let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-        let phi' = q_fun srk ~name `TyBool phi in
-        fv_tru', fv_fls', phi', changed
-      )
-    | `Quantify (qtyp, name, typ, (fv_tru, fv_fls, phi, changed)) ->
-      let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
-      let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
-      let q_fun = 
-        if qtyp = `Forall then mk_forall else mk_exists
-      in
-      fv_tru', fv_fls', q_fun srk ~name typ phi, changed
-    | `Not (fv_trus, fv_flss, phi, changed) -> (fv_flss, fv_trus, mk_not srk phi, changed)
-    | `Proposition (`Var ind) -> (BatSet.Int.singleton ind, BatSet.Int.empty, mk_var srk ind `TyBool, false) 
-    | `Proposition (`App (f, args)) -> (BatSet.Int.empty, BatSet.Int.empty, mk_app srk f args, false)
-    | `Ite ((_, _, cond, changed1), (fv_tru2, fv_fls2, bthen, changed2), (fv_tru3, fv_fls3, belse, changed3)) -> 
-      BatSet.Int.inter fv_tru2 fv_tru3, BatSet.Int.inter fv_fls2 fv_fls3, mk_ite srk cond bthen belse, changed1 || changed2 || changed3
-    | _ -> assert false
-  in
-  let rec helper phi changed eqs diseqs addt_conjs mini = 
-    if changed then
-      let eqs, diseqs, phi', changed' = Formula.eval srk alg phi in
-      let mini = if changed' then false else mini in
-      helper phi' changed' eqs diseqs addt_conjs mini
-    else (
-      match BatSet.Int.min_elt_opt eqs, BatSet.Int.min_elt_opt diseqs with
-      | None, None -> 
-        if mini then (mk_and srk (phi :: addt_conjs)) else (
-          helper (miniscope srk phi) true BatSet.Int.empty BatSet.Int.empty addt_conjs true)
-      | Some ele, _ -> 
-        let phi' =
-          substitute srk (fun (ind, typ) ->
-              if ind = ele then mk_true srk else mk_var srk ind typ)
-            phi
-        in
-        helper phi' true BatSet.Int.empty BatSet.Int.empty ((mk_var srk ele `TyBool) :: addt_conjs) false
-      | _, Some ele ->
-        let phi' =
-          substitute srk (fun (ind, typ) ->
-              if ind = ele then mk_false srk else mk_var srk ind typ)
-            phi
-        in
-        helper phi' true BatSet.Int.empty BatSet.Int.empty ((mk_not srk (mk_var srk ele `TyBool)) :: addt_conjs) false
-    )
-  in
-  let phi' = helper phi true BatSet.Int.empty BatSet.Int.empty [] false in
-  phi'
-
-
-
-
-
-
-let rec quantify_all srk body =
-  if Hashtbl.length (free_vars body) > 0 then
-    quantify_all srk (mk_exists srk `TyInt body)
-  else body
-(*
-let mbp_qe_inplace srk phi =
-  let phi = eliminate_ite srk phi in
-  let count = ref 0 in
-  let last_qt = ref None in
-  let alg = function
-    | `Quantify (qt, _, `TyInt, body) ->
-      let body_temp = quantify_all srk body in
-      to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!count)) ^ ".smt2");
-      count := !count + 1;
-        (* TODO: Slight performance improvement if don't do/undo
-         * the var substitution for every quantifier *)
-        let rev_tbl = Hashtbl.create 97 in
-        let tbl = Memo.memo (fun ind -> 
-            let fresh = mk_symbol srk `TyInt in
-            Hashtbl.add rev_tbl fresh (mk_var srk (ind - 1) `TyInt);
-            fresh)
-        in
-        let phi = substitute srk (fun (i, _) -> mk_const srk (tbl i)) body in
-        let phi = if qt = `Forall then mk_not srk phi else phi in
-        let phi' = (mbp srk (fun s -> not (s = (tbl 0))) phi) in
-        let phi' =  
-          (substitute_const
-             srk
-             (fun s -> 
-               if Hashtbl.mem rev_tbl s then Hashtbl.find rev_tbl s
-               else mk_const srk s)
-             phi')
-        in
-        if qt = `Forall then mk_not srk phi' else phi'
-    | open_form -> Formula.construct srk open_form
-  in
-  Formula.eval srk alg phi
-   *)
-(*
-let mbp_qe_inplace srk phi =
-  let phi = eliminate_ite srk phi in
-  let counter = ref 0 in
-  let perform_substs (typ, count, body) : 'a formula =
-    match typ with
-    | None -> assert (count = 0); body
-    | Some typ ->
-      Log.errorf "count is %n\n\n" count;
-      (*Log.errorf "Phi before here is %a\n\n" (Formula.pp srk) body;*)
-      let body_temp = quantify_all srk body in
-      Log.errorf "BREAK AFTER substs perform";
-      to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!counter)) ^ ".smt2");
-      counter := !counter + 1;
-      let syms = Hashtbl.create 97 in
-      let rev_tbl = Hashtbl.create 97 in
-      let tbl = Memo.memo (fun ind -> 
-          let fresh = mk_symbol srk `TyInt in
-          (if ind < count then Hashtbl.add syms fresh ()
-           else
-             Hashtbl.add rev_tbl fresh (mk_var srk (ind - count) `TyInt));
-          fresh)
-      in
-      let phi = substitute srk (fun (i, _) -> mk_const srk (tbl i)) body in
-      let phi = if typ = `Forall then mk_not srk phi else phi in
-      Log.errorf "Body at this point is \n" (*(Formula.pp srk) body*);
-      let phi' = (mbp srk (fun s -> not (Hashtbl.mem syms s)) phi) in
-      let phi' =  
-        (substitute_const
-           srk
-           (fun s -> 
-              if Hashtbl.mem rev_tbl s then Hashtbl.find rev_tbl s
-              else mk_const srk s)
-           phi')
-      in
-      (*Log.errorf "phi after here is %a\n" (Formula.pp srk) phi';*)
-      if typ = `Forall then mk_not srk phi' else phi'
-  in
-  let alg = function
-    | `Tru -> (None, 0, mk_true srk)
-    | `Fls -> None, 0, mk_false srk
-    | `And conjuncts -> None, 0, mk_and srk (List.map perform_substs conjuncts)
-    | `Or disjuncts -> None, 0, mk_or srk (List.map perform_substs disjuncts)
-    | `Not a -> None, 0, mk_not srk (perform_substs a)
-    | `Quantify (qt, _, `TyInt, (last_qt, count, body)) ->
-      if last_qt = Some qt then (last_qt, count + 1, body)
-      else (Some qt, 1, perform_substs (last_qt, count, body))
-(*None, 0, perform_substs (Some qt, 1, body)*)
-    | `Ite (cond, bthen, belse) -> 
-      None, 0, mk_ite srk (perform_substs cond) (perform_substs bthen) (perform_substs belse)
-    | `Quantify _ -> assert false
-    | `Atom a -> None, 0, Formula.construct srk (`Atom a)
-    | `Proposition _ -> assert false
-    (*| `Propositon a -> None, 0, Formula.construct srk (`Propositon a)*)
-  in
-  perform_substs (Formula.eval srk alg phi)
-*)
-
-
-
-
 let mbp_qe_inplace srk phi =
   let count = ref 0 in
   let qp, matr = normalize srk phi in
-  to_file srk matr ("/Users/jakesilverman/Documents/duet/duet/NORMALIZE.smt2");
   let remove_quant quant_typ syms matr =
-    let body_temp = quantify_all srk matr in
-    to_file srk body_temp ("/Users/jakesilverman/Documents/duet/duet/mbp" ^ (string_of_int (!count)) ^ ".smt2");
 
     count := !count + 1;
     if quant_typ = None then matr
