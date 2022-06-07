@@ -764,7 +764,6 @@ let skolemize_eh_chc srk fp =
 
 
  let eliminate_stores srk phi =
-  Log.errorf "failing on %a" (Formula.pp srk) phi;
   let mk_op op =
     match op with
     | `Eq -> mk_eq
@@ -772,7 +771,6 @@ let skolemize_eh_chc srk fp =
     | `Leq -> mk_leq
   in
   let rec rewrite_store index node =
-    Log.errorf "Node is %a\n" (ArrTerm.pp srk) node;
     match ArrTerm.destruct srk node with
     | `Store (a, i, v) ->
       let i = ArithTerm.eval srk arith_alg i in
@@ -914,12 +912,23 @@ let offset_analysis srk fp =
       fp''
   in
   let fp'3 = 
-    Fp.map_rules (fun (conc, hypo, constr) -> 
+    Fp.map_rules (fun (conc, hypo, constr) ->
+        Log.errorf "Constr here is %a \n" (Formula.pp srk) constr;
+        let constr'' = Quantifier.miniscope srk constr in
         let constr' =
           Quantifier.eq_guided_qe 
             srk
-            (Quantifier.miniscope srk constr)
+            constr''
         in
+        Log.errorf "Constr here is %a \n" (Formula.pp srk) constr;
+        Log.errorf "Constr MINI here is %a \n" (Formula.pp srk) constr'';
+
+        Log.errorf "New constr here is %a \n" (Formula.pp srk) constr';
+
+        match Smt.entails srk constr' (mk_false srk) with
+        | `Yes -> assert false
+        | _ -> ();
+ 
         conc, hypo, constr')
       fp'3
   in
@@ -1114,12 +1123,6 @@ module OldPmfa = struct
     let tf = TransitionFormula.map_formula (eliminate_ite srk) tf in
     let mfa, new_vars = to_mfa srk tf in
     let lia = mfa_to_lia srk mfa in
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/PMFATOLIA_lia.smt2";
-    Symbol.Set.iter (fun sym ->
-        Log.errorf "sym is %a\n" (pp_symbol srk) sym;
-        assert ((typ_symbol srk sym) != `TyArr)
-      )
-      (symbols lia);
     let phi = 
       mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym new_vars))) lia
     in
@@ -1172,21 +1175,18 @@ module OldPmfa = struct
         arr_only_trs : (symbol * symbol) list; }
 
     let abstract srk tf =
-      Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/arraysmttests/preabstractpreproc.smt2";
 
 
       let exists = TransitionFormula.exists tf in
       let phi = eliminate_stores srk (T.formula tf) in
       let phi = eliminate_ite srk phi in
       let phi = unbooleanize srk phi in
-      Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/pre_abstract.smt2";
 
       let tf_pmfa = T.update_formula tf phi in
       let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa in
       let lia_tf = pmfa_to_lia srk tf_proj in
       (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
       let lia = T.formula lia_tf in
-      Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/liaabstract.smt2";
       let ground_lia = Quantifier.mbp_qe_inplace srk lia in
       let ground_tf = TransitionFormula.make ~exists ground_lia (T.symbols lia_tf) in
       let iter_obj = Iter.abstract srk ground_tf in
@@ -1324,6 +1324,38 @@ module OldPmfa = struct
             nstar;
            nstarwnstar] 
       in
+      (*
+       * In exp_res_pre, create equivalence classes of the array
+       * projected symbols. If two projections belong to same class,
+       * just use one of the two projections and then make arrs eq
+       * via arr_eq symbol as a conjunct
+       *
+       * Big issue: is computing these equiv classes hugely 
+       * computationally expensive - solution: heuristics, only
+       * compare pre array with post array
+       *)
+
+      let eqs =
+        List.filter_map (fun (z, z') ->
+           match Smt.entails srk 
+              exp_res_pre 
+              (mk_eq srk (mk_const srk z) (mk_const srk z'))
+           with
+           | `Yes ->
+             let arr_eq = 
+               mk_arr_eq
+                 srk
+                 (mk_const srk (Hashtbl.find obj.arr_map z))
+                 (mk_const srk (Hashtbl.find obj.arr_map z'))
+             in
+             Hashtbl.replace obj.arr_map z (Hashtbl.find obj.arr_map z');
+             Some arr_eq
+           | `No -> None
+           | `Unknown -> failwith "failed in comparing lia vars"
+          )
+          obj.arr_only_trs
+      in
+
       let map sym =  
         if sym = obj.proj_ind || sym = obj.proj_indpost 
         then mk_var srk 0 `TyInt
@@ -1334,7 +1366,7 @@ module OldPmfa = struct
       in
       let substed = substitute_const srk map exp_res_pre in
       let res = (mk_forall srk `TyInt substed) in
-      res
+      mk_and srk (res :: eqs)
 
     let pp _ _ _= failwith "todo 10"
 

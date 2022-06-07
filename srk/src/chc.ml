@@ -126,7 +126,7 @@ module Fp = struct
     | Edge (fvc, fvh, phix), Edge (_, _, phiy) -> 
       Edge (fvc, fvh, mk_or srk [phix; phiy])
 
-  let mul srk x y =
+  let mul srk index x y =
     match x, y with
     | One, e -> e
     | e, One -> e
@@ -158,8 +158,9 @@ module Fp = struct
           (mk_and srk [phix'; phiy'])
           p_hy
       in
-      (*let phi' = Quantifier.eq_guided_qe srk phi' in*)
-      Edge (p_cy, p_hx, phi')
+      let phi'' = Quantifier.eq_guided_qe srk phi' in
+      index := !index + 1;
+      Edge (p_cy, p_hx, phi'')
 
   let star srk pd x =
     match x with
@@ -201,15 +202,22 @@ module Fp = struct
              | None -> mk_const srk sym)
           phi'
       in
+      let phi' =
+        Quantifier.eq_guided_qe 
+          srk
+          (Quantifier.miniscope srk phi')
+      in
+     
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
 
   let linchc_to_weighted_graph srk (fp : 'a t) pd =
     let open WeightedGraph in
+    let index = ref 0 in
     (* The edges of the graph are of the form 
      * [(conc params, hypo params, constr)]*) 
-    let alg = {mul=mul srk; add=add srk; star=star srk pd; zero; one} in
+    let alg = {mul=mul srk index; add=add srk; star=star srk pd; zero; one} in
     let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
     let wg = WeightedGraph.add_vertex wg goal_vert in
     let prop_symbols =
@@ -232,14 +240,12 @@ module Fp = struct
         (fun wg (conc, hypo_props, constr) ->
            match hypo_props with
            | [] ->
-             Log.errorf "ERROR1";
              WeightedGraph.add_edge 
                wg 
                start_vert
                (Edge (BatList.combine conc.names (Proposition.typ_of_params srk conc), [], constr))
                (int_of_symbol conc.symbol)
            | [hd] -> 
-             Log.errorf "ERROR2";
              WeightedGraph.add_edge 
                wg
                (int_of_symbol hd.symbol)
@@ -594,9 +600,7 @@ module ChcSrkZ3 = struct
   let parse_file ?(ctx=Z3.mk_context []) srk filename =
     let z3 = ctx in
     let z3fp = Z3.Fixedpoint.mk_fixedpoint z3 in
-    Log.errorf "PARSING STARTED";
     let z3queries = Z3.Fixedpoint.parse_file z3fp filename in
-    Log.errorf "PARSING COMPLETE";
     parse_z3fp ~z3queries srk z3fp
 
   let parse_string ?(ctx=Z3.mk_context []) srk str =
