@@ -19,6 +19,11 @@ module Fp : sig
   val get_rules : 'a fp -> (proposition * proposition list * 'a formula) list
   val map_rules : ((proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
   val filter_rules : ((proposition * proposition list * 'a formula) -> bool) -> 'a fp -> 'a fp
+  val filteri_rules : (int -> (proposition * proposition list * 'a formula) -> bool) -> 'a fp -> 'a fp
+  val iteri_rules : (int -> (proposition * proposition list * 'a formula) -> unit) -> 'a fp -> unit
+
+
+
 
   val mapi_rules : (int -> (proposition * proposition list * 'a formula) -> (proposition * proposition list * 'a formula)) -> 'a fp -> 'a fp
 

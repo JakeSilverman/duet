@@ -205,7 +205,7 @@ let local_partiton_and_cands srk constr int_fvs_set =
    * dir_eqs lets us keep track of free integer variables the are equal and
    * follow the pattern of equalities that we introduce during in chc.ml
    * *)
-  let arr_tbl = Memo.memo (fun a -> BatUref.uref (a, [])) in
+  let arr_tbl = Memo.memo (fun a -> BatUref.uref (a, [], false)) in
   let int_adj_eqs = BatHashtbl.create 97 in 
   let dir_eqs = Memo.memo (fun fv -> BatUref.uref (BatSet.Int.singleton fv)) in
 
@@ -229,8 +229,8 @@ let local_partiton_and_cands srk constr int_fvs_set =
     | `Ite _ -> assert false
     | `Select (a, i) ->
       let a = ArrTerm.eval srk arr_term_alg a in
-      let a_c, varsets = BatUref.uget (arr_tbl a) in
-      BatUref.uset (arr_tbl a) (a_c, (int_varset_of_term i) :: varsets);
+      let a_c, varsets, _ = BatUref.uget (arr_tbl a) in
+      BatUref.uset (arr_tbl a) (a_c, (int_varset_of_term i) :: varsets, true);
       populate_tbls_from_arith i 
   and populate_tbls_from_phi phi =
     match Formula.destruct srk phi with
@@ -264,10 +264,10 @@ let local_partiton_and_cands srk constr int_fvs_set =
     | `Atom (`ArrEq (a, b)) ->
       let a = ArrTerm.eval srk arr_term_alg a in
       let b = ArrTerm.eval srk arr_term_alg b in
-      let sel (a_c, a_vars) (b_c, b_vars) = 
+      let sel (a_c, a_vars, a_rw) (b_c, b_vars, b_rw) = 
         match a_c with
-        | Fv _ -> a_c, (a_vars @ b_vars)
-        | Sym _ -> b_c, (a_vars @ b_vars)
+        | Fv _ -> a_c, (a_vars @ b_vars), a_rw || b_rw
+        | Sym _ -> b_c, (a_vars @ b_vars), a_rw || b_rw
       in
       BatUref.unite ~sel (arr_tbl a) (arr_tbl b)
     | `Ite _ -> assert false
@@ -275,8 +275,8 @@ let local_partiton_and_cands srk constr int_fvs_set =
     | `App (sym, []) -> Sym sym 
     | `Ite _ -> assert false 
     | `Store (arr, i, v) ->
-      let a_c, varsets = BatUref.uget (arr_tbl arr) in
-      BatUref.uset (arr_tbl arr) (a_c, (int_varset_of_term i) :: varsets);
+      let a_c, varsets, _ = BatUref.uget (arr_tbl arr) in
+      BatUref.uset (arr_tbl arr) (a_c, (int_varset_of_term i) :: varsets, true);
       populate_tbls_from_arith i;
       populate_tbls_from_arith v;
       arr
@@ -303,7 +303,7 @@ let local_partiton_and_cands srk constr int_fvs_set =
 
   let arr_fv_class_and_cands = BatHashtbl.create 99 in
   VarSet.iter (fun var ->
-        let arr_class, rwvs = BatUref.uget (arr_tbl var) in
+        let arr_class, rwvs, has = BatUref.uget (arr_tbl var) in
         let unwrapped_class = match arr_class with Fv fv -> fv | Sym _ -> 
           assert false in
         let cands =
@@ -336,7 +336,7 @@ let local_partiton_and_cands srk constr int_fvs_set =
             int_fvs_set
             rwvs
         in
-        BatHashtbl.add arr_fv_class_and_cands var (unwrapped_class, cands))
+        BatHashtbl.add arr_fv_class_and_cands var (unwrapped_class, cands, has))
     arr_varset;
   arr_fv_class_and_cands
 
@@ -392,7 +392,8 @@ let determine_offsets srk fp =
               let cell =  
                 (BatUref.uref (CVSet.singleton {sym; param}, 
                                Hashtbl.create 97,
-                              Symbol.Set.empty)) 
+                               Symbol.Set.empty,
+                               BatSet.Int.empty)) 
               in
               Hashtbl.add global_partitioning {sym; param} cell))
           lst
@@ -400,7 +401,7 @@ let determine_offsets srk fp =
     (Fp.prop_symbols fp);
 
   (* Populate partitioning and candidate offsets, one rule at a time *)
-  List.iter (fun (conc, hypo, constr) ->
+  List.iteri (fun rule_num (conc, hypo, constr) ->
       (* Compute a map from constr fvs to chcvars;
        * determine which fvs in constrs are int typed *)
       let fvcounter = ref 0 in
@@ -431,7 +432,7 @@ let determine_offsets srk fp =
       (* We build a local partitioning for current rule and then merge
        * it into global partitioning *)
       let offset_cands = local_partiton_and_cands srk constr !int_fvs_set in
-      BatHashtbl.iter (fun arr_var (local_arr_cell, int_fvs) ->
+      BatHashtbl.iter (fun arr_var (local_arr_cell, int_fvs, has_rw) ->
           let local_cands = BatHashtbl.create 97 in
           BatList.iter (fun chcvar ->
               BatHashtbl.modify_def
@@ -440,22 +441,26 @@ let determine_offsets srk fp =
                 (BatSet.Int.add chcvar.param)
                 local_cands)
             (List.map (fun fv -> chcvar_of fv) (BatSet.Int.to_list int_fvs));
+          let add_rule rules = 
+            if has_rw then BatSet.Int.add rule_num rules else rules
+          in
           match arr_var with
           | Sym sym ->
-            let cell, cands, syms = BatUref.uget (cell_of local_arr_cell) in
+            let cell, cands, syms, rules = BatUref.uget (cell_of local_arr_cell) in
             BatUref.uset (cell_of local_arr_cell) 
-              (cell, intersect cands local_cands, Symbol.Set.add sym syms)
+              (cell, intersect cands local_cands, Symbol.Set.add sym syms, add_rule rules)
           | Fv arr_fv ->
-            let sel (arrs1, cands1, syms1) (arrs2, cands2, syms2) =
+            let sel (arrs1, cands1, syms1, rules1) (arrs2, cands2, syms2, rules2) =
               (CVSet.union arrs1 arrs2), 
               (intersect cands1 cands2),  
-              Symbol.Set.union syms1 syms2
+              Symbol.Set.union syms1 syms2,
+              add_rule (BatSet.Int.union rules1 rules2)
             in
             BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell);
             let arr_cell = CVSet.singleton (chcvar_of local_arr_cell) in
-           sel 
+            sel 
               (BatUref.uget (cell_of arr_fv)) 
-              (arr_cell, local_cands, Symbol.Set.empty)
+              (arr_cell, local_cands, Symbol.Set.empty, BatSet.Int.empty)
             |> BatUref.uset (cell_of arr_fv))
         offset_cands)
     (Fp.get_rules fp);
@@ -480,7 +485,7 @@ let determine_offsets srk fp =
   (* We will create an LIA formula for each cell whose solution is a valid set 
    * of offset candidates that takes proposed candidates into account. *)
   let cell_to_offset = 
-    BatArray.mapi (fun cell_num (arrs, offsetcands, syms) ->
+    BatArray.mapi (fun cell_num (arrs, offsetcands, syms, rules_with_rws) ->
         (* Create list of relations occuring in this cell *)
         let relations = CVSet.fold (fun chcvar relations ->
             Symbol.Set.add chcvar.sym relations)
@@ -500,15 +505,64 @@ let determine_offsets srk fp =
             Hashtbl.add srp_inv sym ele;
             Hashtbl.add symb_rel_params ele (mk_const srk sym))
           relations;
+        let sym_to_edge_nums = BatHashtbl.create 97 in
+        let edge_nums_to_syms = BatHashtbl.create 97 in
+        
+        Fp.iteri_rules (fun ind (conc, hypos, _) ->
+            BatHashtbl.modify_def
+              (BatSet.Int.empty, BatSet.Int.empty)
+              (Proposition.symbol_of conc)
+              (fun (i, o) -> (BatSet.Int.add ind i), o)
+              sym_to_edge_nums;
+            let hypos_sym = List.map Proposition.symbol_of hypos in
+            List.iter (fun sym ->
+                BatHashtbl.modify_def
+                  (BatSet.Int.empty, BatSet.Int.empty)
+                  sym
+                  (fun (i, o) -> i, (BatSet.Int.add ind o))
+                  sym_to_edge_nums)
+              hypos_sym;
+            BatHashtbl.add 
+              edge_nums_to_syms 
+              ind 
+              (hypos_sym, [Proposition.symbol_of conc]))
+          fp;
+        let rec paint dir marked queue =
+          let switch = if dir = true then fst else snd in 
+          match queue with
+          | [] -> marked
+          | hd :: tl ->
+            (* This is potentially making unsound assumptions about shape of non-lin chc *)
+            let adjs =
+              List.fold_left (fun adjs sym ->
+                  BatSet.Int.union 
+                    adjs 
+                    (switch (BatHashtbl.find sym_to_edge_nums sym)))
+                BatSet.Int.empty
+                (switch (BatHashtbl.find edge_nums_to_syms hd))
+            in
+            let to_queue = BatSet.Int.to_list (BatSet.Int.diff adjs marked) in
+            paint dir (BatSet.Int.union marked adjs) (to_queue @ tl)
+        in
+        let backwards_paint = paint true rules_with_rws (BatSet.Int.to_list rules_with_rws) in
+        let forwards_paint = paint false rules_with_rws (BatSet.Int.to_list rules_with_rws) in
+        let full_painted = BatSet.Int.inter backwards_paint forwards_paint in
+
         let subchc = 
-          Fp.filter_rules (fun (conc, hypos, _) ->
+          Fp.filteri_rules (fun ind (conc, hypos, _) ->
               let hypo_rels = Symbol.Set.of_list 
                   (List.map (fun prop -> Proposition.symbol_of prop) hypos)
               in
               (Symbol.Set.mem (Proposition.symbol_of conc) relations) &&
-              (not (Symbol.Set.disjoint hypo_rels relations)))
+              (not (Symbol.Set.disjoint hypo_rels relations)) &&
+              (BatSet.Int.mem ind full_painted))
             fp
         in
+
+        BatHashtbl.iter (fun rel fvs -> 
+          Log.errorf "Proposed offset for is %a\n" (pp_symbol srk) rel;
+          BatSet.Int.iter (fun fv -> Log.errorf "one is %n\n" fv) fvs)
+          offsetcands;
 
         let subchc_formula = 
           create_offset_formula srk subchc symb_rel_params offsetcands 
@@ -519,7 +573,9 @@ let determine_offsets srk fp =
         Smt.Solver.add solver [offset_formula];
         match Smt.Solver.get_model solver with
         | `Unsat 
-        | `Unknown -> failwith "Cannot determine offsets"
+        | `Unknown -> 
+          Log.errorf "Offset formula is %a\n" (Formula.pp srk) offset_formula;
+          failwith "Cannot determine offsets"
         | `Sat m ->
           match Interpretation.select_implicant m offset_formula with
           | None -> assert false
@@ -623,6 +679,7 @@ let remove_skol_consts_chc srk fp =
 
 
 let apply_offset_candidate srk constr offsets =
+  Log.errorf "Constr is %a\n" (Formula.pp srk) constr;
   let rec apply_offset_formula = function
     | `Atom (`Arith (op, s, t)) ->
       let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
@@ -642,6 +699,7 @@ let apply_offset_candidate srk constr offsets =
   and apply_offset_arith = function
     | `Select (a, term) ->
       let a, offset = ArrTerm.eval srk apply_offset_arr a in
+      let offset = Option.get offset in
       (* look into getting rid of div by char size *)
       mk_select 
         srk 
@@ -651,14 +709,15 @@ let apply_offset_candidate srk constr offsets =
     | open_term -> ArithTerm.construct srk open_term
   and apply_offset_arr = function
     | `App (sym, []) -> 
-      mk_const srk sym, Option.get (Hashtbl.find offsets (Sym sym))
+      mk_const srk sym, (Hashtbl.find offsets (Sym sym))
     | `Var (ind, typ) ->
-      mk_var srk ind (typ :> typ_fo), Option.get (Hashtbl.find offsets (Fv ind))
+      mk_var srk ind (typ :> typ_fo), (Hashtbl.find offsets (Fv ind))
     | `Store ((a, offset), i, v) ->
+      let unwrapped_offset = Option.get offset in
       let i = ArithTerm.eval srk apply_offset_arith i in
       (* Look into getting rid of div by char size *)
       let i_offset = 
-        mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk offset `TyInt)) (mk_int srk 4))
+        mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk unwrapped_offset `TyInt)) (mk_int srk 4))
       in
       let v = ArithTerm.eval srk apply_offset_arith v in
       mk_store srk a i_offset v, offset
