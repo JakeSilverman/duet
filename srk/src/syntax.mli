@@ -673,4 +673,4 @@ module ContextTable : sig
   val clear : 'a t -> unit
 end
 
-(*val to_file : 'a context -> 'a formula -> string -> unit*)
+val to_file : 'a context -> 'a formula -> string -> unit

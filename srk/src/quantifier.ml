@@ -2,7 +2,7 @@ open Syntax
 open Linear
 open BatPervasives
 
-include Log.Make(struct let name = "srk.quantifier" end)
+include Log.Make(struct let name = "srk.cquantifier" end)
 
 exception Equal_term of Linear.QQVector.t
  
@@ -2496,6 +2496,7 @@ let get_subst_candidate srk eqs qt_infos =
   else Some (List.hd candidates)
 
 let eq_guided_qe srk phi =
+  let phi = Syntax.eliminate_ite srk phi in
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
   let apply_quant_block block eqs diseqs fv_tru fv_fls phi =

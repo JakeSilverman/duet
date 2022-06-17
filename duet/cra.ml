@@ -1461,6 +1461,11 @@ let _ =
 
 let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
 
+
+(*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
+i*)
+
+
  let time _ =
     let t = Unix.gettimeofday () in
     (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
@@ -1470,10 +1475,7 @@ let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(Polyhedro
 
 let array_analyze file =
   (*let init = time "init" in*)
-  Log.errorf "TRYING TO PARSE";
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
-  Log.errorf "PARSED";
- Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
   let fp = Pmfa.elim_ite_chc srk fp in
   (*let _ = determine_eq_ints_chc srk fp in*)
   (*List.iter (fun (_, _, constr) ->
@@ -1491,20 +1493,19 @@ let array_analyze file =
         names;
     )
     classes;*)
-  Log.errorf "DONE GETING OFFSET CANDS";
   let fp = offset_analysis srk fp in
   (*let _ = determine_offsets srk fp in*)
   Log.errorf "DONE DETERMINING OFFSET CANDS";
- Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
 
 
   
     let phi = Chc.Fp.query_vc_condition srk fp ad in
-
-  (*Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDINIT.smt2";*)
+    Log.errorf "FOUND VC COND";
+  (*Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/VCCONDINIT.smt2";*)
 
   
   let phi = Syntax.eliminate_ite srk phi in
+  
   (*let phi =
     Quantifier.eq_guided_qe 
       srk
@@ -1516,10 +1517,10 @@ let array_analyze file =
  
   let trs = [] in
   let tf = TransitionFormula.make phi trs in
-  let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in
-  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
+  (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
+  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf) in
   (*let lia = Quantifier.eq_guided_qe srk lia in*)
-
+    Log.errorf "MADE IT TO FINAL QUERY";
   match Quantifier.simsat srk lia with
   | `Unsat  -> 
     logf ~level:`always "Safe"
