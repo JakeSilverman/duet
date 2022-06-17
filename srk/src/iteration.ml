@@ -292,6 +292,7 @@ module GuardedTranslation = struct
         (fun x -> Symbol.Map.mem x sym_to_var)
         (mk_and srk ((TF.formula tf)::sx_eq_y))
       |> substitute_map srk sym_to_var
+      |> SrkSimplify.simplify_dda srk
     in
     { simulation = Array.of_list simulation;
       translation = Array.of_list translation;

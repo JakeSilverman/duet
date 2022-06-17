@@ -315,6 +315,15 @@ let isolate_linear srk x term =
   with Nonlinear -> None
 
 let simplify_dda srk phi =
+  let syms_to_fvs = Hashtbl.create 97 in
+  let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+      let sym = mk_symbol srk (typ :> typ) in
+      Hashtbl.add syms_to_fvs sym (ind, typ);
+      sym) 
+  in
+  let phi = 
+    substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) phi 
+  in 
   let solver = Smt.mk_solver srk in
   let rec simplify_children star children =
     let changed = ref false in
@@ -361,7 +370,17 @@ let simplify_dda srk phi =
       Smt.Solver.pop solver 1;
       simplified
   in
-  simplify_dda_impl phi
+  let res = simplify_dda_impl phi in
+  substitute_sym
+    srk
+    (fun s -> 
+       if Hashtbl.mem syms_to_fvs s then (
+         let ind, typ = Hashtbl.find syms_to_fvs s in
+         mk_var srk ind typ)
+       else
+         mk_const srk s)
+    res
+
 
 (* Given a term of the form floor(x/d) with d a positive int, retrieve the pair (x,d) *)
 let destruct_idiv srk t =

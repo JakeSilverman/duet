@@ -3,6 +3,14 @@ open Chc
 module T = TransitionFormula
 
 
+
+let time _ =
+  let t = Unix.gettimeofday () in
+  (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
+
+let diff _ _ _ = ()
+  (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
+
 let typ_symbol_fo srk sym =
     match typ_symbol srk sym with
     | `TyInt -> `TyInt
@@ -191,7 +199,7 @@ let create_offset_formula srk fp named_rels offsetcands =
  * of integer fv that we might want to use as offset candidates for this cell in
  * this formula. The determination of offset candidates is entirely heuristic.
  *)
-let local_partiton_and_cands srk constr int_fvs_set =
+let local_partiton_and_cands srk constr int_fvs_set _ =
 
   (* arr_tbl maps each array variables to its cell in the array partitioning;
    * the cell additional carries along a representative (element of the cell)
@@ -431,7 +439,11 @@ let determine_offsets srk fp =
       in
       (* We build a local partitioning for current rule and then merge
        * it into global partitioning *)
-      let offset_cands = local_partiton_and_cands srk constr !int_fvs_set in
+      let flag : bool = 
+        BatList.mem "vec_add@_shadow.mem.4.0"
+          (List.map (fun prop -> show_symbol srk (Proposition.symbol_of prop)) (conc :: hypo))
+      in
+      let offset_cands = local_partiton_and_cands srk constr !int_fvs_set flag in
       BatHashtbl.iter (fun arr_var (local_arr_cell, int_fvs, has_rw) ->
           let local_cands = BatHashtbl.create 97 in
           BatList.iter (fun chcvar ->
@@ -462,7 +474,7 @@ let determine_offsets srk fp =
               (BatUref.uget (cell_of arr_fv)) 
               (arr_cell, local_cands, Symbol.Set.empty, BatSet.Int.empty)
             |> BatUref.uset (cell_of arr_fv))
-        offset_cands)
+        offset_cands;)
     (Fp.get_rules fp);
   (* Obtain a single copy of each cell / offset proposals *)
   let rec ureflist_mem lst urf =
@@ -564,9 +576,17 @@ let determine_offsets srk fp =
           BatSet.Int.iter (fun fv -> Log.errorf "one is %n\n" fv) fvs)
           offsetcands;
 
+        BatHashtbl.iter (fun sym fvs ->
+            Log.errorf "offset cands for sym %a include\n" (pp_symbol srk) sym;
+            BatSet.Int.iter (fun fv -> Log.errorf "includes %n\n" fv) fvs;
+            Log.errorf "\n\n")
+          offsetcands;
         let subchc_formula = 
           create_offset_formula srk subchc symb_rel_params offsetcands 
         in
+        List.iter (fun subchc_phi ->
+            Log.errorf "Sub formula is %a\n" (Formula.pp srk) subchc_phi)
+          subchc_formula;
         let offset_formula = mk_and srk subchc_formula in
 
         let solver = Smt.mk_solver srk in
@@ -979,27 +999,15 @@ let offset_analysis srk fp =
             srk
             constr''
         in
-        Log.errorf "Constr here is %a \n" (Formula.pp srk) constr;
-        Log.errorf "Constr MINI here is %a \n" (Formula.pp srk) constr'';
 
-        Log.errorf "New constr here is %a \n" (Formula.pp srk) constr';
-
-        match Smt.entails srk constr' (mk_false srk) with
-        | `Yes -> assert false
-        | _ -> ();
  
         conc, hypo, constr')
       fp'3
   in
 
-(*
-  let fp'3 = 
-    Fp.map_rules (fun (conc, hypo, constr) ->
-        check_quants srk constr; 
-        conc, hypo, constr)
-      fp'3
-  in
-*)
+
+  let fp'3 =check_q_array_chc srk fp'3 in
+
 
   (* try some of the exist quant generalization functions *)
 
@@ -1028,23 +1036,39 @@ module OldPmfa = struct
   (* Projects an array transition formula [tf] down to a single symbolic index
    * [j]. The dynamics of element [j] of array transition variables (a, a') 
    * are captured with the integer transition variables ([map] a, [map] a'). *)
-  let projection srk tf =
+  let projection srk tf eqs =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
+    let rev_map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let j = mk_symbol srk ~name:"j" `TyInt in
     let j' = mk_symbol srk ~name:"j'" `TyInt in
 
     let f (trs, arr_only_trs, phi) (a, a') = 
       let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
       let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
+      let phi = 
+        if Symbol.Map.mem a eqs
+        then (
+          mk_and 
+            srk 
+            [
+             mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+             phi])
+        else
+          mk_and 
+            srk 
+            [mk_eq srk (mk_const srk z) (mk_select srk (mk_const srk a) (mk_const srk j));
+             mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+             phi]
+      in
+
+
       Hashtbl.add map z a;
       Hashtbl.add map z' a';
+      Hashtbl.add rev_map a z;
+      Hashtbl.add rev_map a' z';
       (z, z') :: trs,
       (z, z') :: arr_only_trs,
-      mk_and 
-        srk 
-        [mk_eq srk (mk_const srk z) (mk_select srk (mk_const srk a) (mk_const srk j));
-         mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
-         phi]
+      phi
     in
     let integer_trs, arr_only_trs, phi = 
       List.fold_left f ((j, j') :: int_trs srk tf, [], T.formula tf) (arr_trs srk tf) 
@@ -1053,7 +1077,7 @@ module OldPmfa = struct
     let phi = 
       mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs)) phi 
     in
-    j, j', map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
+    j, j', map, rev_map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
 
   (* Convert from a pmfa formula to an mfa formula.
    * We achieve this by converting the pmfa formula to an equivalent formula
@@ -1229,36 +1253,177 @@ module OldPmfa = struct
         proj_ind : Symbol.t;
         proj_indpost : Symbol.t;
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
+        rev_map : (Symbol.t, Symbol.t) Hashtbl.t;
+        eqs_trs : symbol Symbol.Map.t;
         iter_trs : (Symbol.t * Symbol.t) list;
         ground_lia : 'a formula;
         arr_only_trs : (symbol * symbol) list; }
 
+    let arr_eqs srk tf = 
+      let alg = function
+        | `Atom (`ArrEq (a, b)) ->
+          begin match ArrTerm.destruct srk a, ArrTerm.destruct srk b with
+            | `App (a, []), `App (b, []) -> [(a, b)]
+            | _ -> []
+          end
+        | `And conjuncts -> List.fold_left List.append [] conjuncts
+        | _ -> []
+      in
+      Formula.eval srk alg (T.formula tf)
+
+    let int_eqs srk tf = 
+      let alg = function
+        | `Atom (`Arith (`Eq, a, b)) ->
+          begin match ArithTerm.destruct srk a, ArithTerm.destruct srk b with
+            | `App (a, []), `App (b, []) -> [(a, b)]
+            | _ -> []
+          end
+        | `And conjuncts -> List.fold_left List.append [] conjuncts
+        | _ -> []
+      in
+      Formula.eval srk alg (T.formula tf)
+
+
+
     let abstract srk tf =
+      let t1 = time "In abstract" in
+
+      Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/arraysmttests/checking_eqs.smt2";
+
+    let eqs = arr_eqs srk tf in
+
+    let eqs_trs =
+      List.fold_left (fun eqs_trs (a, b) ->
+          if List.mem (a, b) (T.symbols tf) then
+            Symbol.Map.add a b eqs_trs
+          else if List.mem (b, a) (T.symbols tf) then
+            Symbol.Map.add a b eqs_trs
+          else eqs_trs)
+        Symbol.Map.empty
+        eqs
+    in
+
+    let _ =
+      List.fold_left (fun eqs_trs (a, b) ->
+          if List.mem (a, b) (T.symbols tf) then
+            Symbol.Map.add a b eqs_trs
+          else if List.mem (b, a) (T.symbols tf) then
+            Symbol.Map.add a b eqs_trs
+          else eqs_trs)
+        Symbol.Map.empty
+        (int_eqs srk tf)
+    in
+
+    let eqs_ints_trs = Symbol.Map.empty in
+
+
+    let phi =
+      substitute_sym 
+        srk
+        (fun s ->
+           if Symbol.Map.mem s eqs_trs then (
+             mk_const srk (Symbol.Map.find s eqs_trs))
+           else if Symbol.Map.mem s eqs_ints_trs then (
+             mk_const srk (Symbol.Map.find s eqs_ints_trs))
+           else mk_const srk s)
+        (T.formula tf)
+    in
 
 
       let exists = TransitionFormula.exists tf in
-      let phi = eliminate_stores srk (T.formula tf) in
+      let phi = eliminate_stores srk phi in
       let phi = eliminate_ite srk phi in
       let phi = unbooleanize srk phi in
+     
 
       let tf_pmfa = T.update_formula tf phi in
-      let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa in
-      let lia_tf = pmfa_to_lia srk tf_proj in
-      (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
-      let lia = T.formula lia_tf in
-      let ground_lia = Quantifier.mbp_qe_inplace srk lia in
+      let proj_ind, proj_indpost, arr_map, rev_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
+      (*let tf_proj' =
+        substitute_sym 
+          srk
+          (fun s ->
+             if Hashtbl.mem eqs_map s then (
+               mk_const srk (Hashtbl.find eqs_map s))
+             else if Hashtbl.mem arr_map s && 
+                     Hashtbl.mem eqs_map (Hashtbl.find arr_map s)
+             then (
+               mk_const srk
+                 (Hashtbl.find rev_map (Hashtbl.find eqs_map (Hashtbl.find arr_map s))))
+             else mk_const srk s)
+          (T.formula tf_proj)
+        in*)
+
+
+    let lia_tf = pmfa_to_lia srk tf_proj in
+    (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
+    let lia = T.formula lia_tf in
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/liaprembp.smt2";
+    let lia = 
+      Quantifier.eq_guided_qe 
+        srk
+        (Quantifier.miniscope srk lia)
+    in
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/liaminiedprembp.smt2";
+ 
+
+    let ground_lia = Quantifier.mbp_qe_inplace srk lia in
+
+
+
+
+
+
+    
+    let ground_lia =
+      mk_and
+        srk
+        (ground_lia ::
+         (Symbol.Map.fold (fun a b acc ->
+              (mk_eq
+                 srk
+                 (mk_const srk (Hashtbl.find rev_map a))
+                 (mk_const srk (Hashtbl.find rev_map b)))
+              :: acc)
+             eqs_trs
+             []))
+    in
+    let ground_lia = 
+      mk_and
+        srk
+        (ground_lia ::
+         (Symbol.Map.fold (fun a b acc ->
+              (mk_eq
+                 srk
+                 (mk_const srk a)
+                 (mk_const srk b))
+              :: acc)
+             eqs_ints_trs
+             []))
+    in
+
+
+
+
+  Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/new_ground.smt2";
+
+
       let ground_tf = TransitionFormula.make ~exists ground_lia (T.symbols lia_tf) in
       let iter_obj = Iter.abstract srk ground_tf in
 
+      let exit_abst = time "Exit ABSTRACT" in
+      diff t1 exit_abst "Exit Abstract";
       {iter_obj;
        proj_ind;
        proj_indpost;
        arr_map;
+       rev_map;
+       eqs_trs;
        iter_trs=(T.symbols lia_tf);
        ground_lia;
-       arr_only_trs }
+       arr_only_trs;
+      }
      
-    let at_most_single_write srk write noop trs =
+   (* let at_most_single_write srk write noop trs =
       let exp = mk_symbol srk ~name:"exp" `TyInt in
 
       let noop_star =
@@ -1282,9 +1447,15 @@ module OldPmfa = struct
       | `Sat -> false
       | `Unsat -> true
       | `Unknown -> failwith "at most single unknown"
-
+*)
+ 
+    let at_most_single_write _ _ _ _ =
+      true
+     
 
     let exp srk _ lc obj =
+      let t1 = time "EXP IN" in
+
       let arr_vars_eq = 
         mk_and
           srk
@@ -1364,7 +1535,11 @@ module OldPmfa = struct
           (Quantifier.miniscope srk nstarwnstar)
       in
 
-      (*let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in*)
+
+      (* TODO: make sure quants introduced *)
+      let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
+
+
 
       let nstar =
         Iter2.exp
@@ -1375,6 +1550,14 @@ module OldPmfa = struct
               srk 
               noop)
       in
+
+
+
+      let nstar = Quantifier.mbp_qe_inplace srk nstar in
+      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
+
+
+
 
       let exp_res_pre = 
         mk_or 
@@ -1393,26 +1576,13 @@ module OldPmfa = struct
        * computationally expensive - solution: heuristics, only
        * compare pre array with post array
        *)
-
-      let eqs =
-        List.filter_map (fun (z, z') ->
-           match Smt.entails srk 
-              exp_res_pre 
-              (mk_eq srk (mk_const srk z) (mk_const srk z'))
-           with
-           | `Yes ->
-             let arr_eq = 
-               mk_arr_eq
-                 srk
-                 (mk_const srk (Hashtbl.find obj.arr_map z))
-                 (mk_const srk (Hashtbl.find obj.arr_map z'))
-             in
-             Hashtbl.replace obj.arr_map z (Hashtbl.find obj.arr_map z');
-             Some arr_eq
-           | `No -> None
-           | `Unknown -> failwith "failed in comparing lia vars"
-          )
-          obj.arr_only_trs
+      (* prob still good to do replace before mbp *)
+      let eqs_2 = 
+        Symbol.Map.fold (fun a b acc ->
+            mk_arr_eq srk (mk_const srk a) (mk_const srk b) ::
+            acc)
+          obj.eqs_trs
+          []
       in
 
       let map sym =  
@@ -1425,7 +1595,9 @@ module OldPmfa = struct
       in
       let substed = substitute_const srk map exp_res_pre in
       let res = (mk_forall srk `TyInt substed) in
-      mk_and srk (res :: eqs)
+      let t2 = time "EXP OUT" in
+      diff t1 t2 "EXP";
+      mk_and srk (res ::  eqs_2)
 
     let pp _ _ _= failwith "todo 10"
 

@@ -5,6 +5,17 @@ module DynArray = BatDynArray
 module D = Graph.Pack.Digraph
 module WG = WeightedGraph
 
+
+
+let time _ =
+  let t = Unix.gettimeofday () in
+  (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
+
+let diff t1 t2 s =
+  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+
+
+
 type proposition = { symbol : symbol; names : string list }
 module Proposition = struct
   (* Relation atoms have as parameters free variables. We maintain the invariant
@@ -135,7 +146,8 @@ module Fp = struct
     | e, One -> e
     | Zero, _
     | _, Zero -> Zero
-    | Edge (_, p_hx, phix), Edge (p_cy, p_hy, phiy) -> 
+    | Edge (_, p_hx, phix), Edge (p_cy, p_hy, phiy) ->
+      let t1 = time "Mul entered" in
       let num_p_cy, num_p_hy = List.length p_cy, List.length p_hy in
       let phiy' = 
         substitute
@@ -163,6 +175,8 @@ module Fp = struct
       in
       let phi'' = Quantifier.eq_guided_qe srk phi' in
       index := !index + 1;
+      let t2 = time "Mul done" in
+      diff t1 t2 "Mul";
       Edge (p_cy, p_hx, phi'')
 
   let star srk pd x =
@@ -170,6 +184,8 @@ module Fp = struct
     | Zero -> Zero
     | One -> One
     | Edge (p_c, p_h, phi) ->
+      let t1 = time "Star Enter" in
+
       let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
       let var_to_sym = Hashtbl.create 97 in
       let num_trs = List.length p_c in
@@ -196,6 +212,8 @@ module Fp = struct
       let lc = mk_symbol srk `TyInt in
       let tf = TransitionFormula.make ~exists phi trs in
       let phi' = PD.exp srk trs (mk_const srk lc) (PD.abstract srk tf) in
+      let t2 = time "Star Starred" in
+      diff t1 t2 "Abstract and Exp Done";
       let phi' =
         substitute_sym 
           srk
@@ -205,12 +223,15 @@ module Fp = struct
              | None -> mk_const srk sym)
           phi'
       in
+      
       let phi' =
         Quantifier.eq_guided_qe 
           srk
           (Quantifier.miniscope srk phi')
       in
-     
+      let t3 = time "Star Fin" in
+      diff t2 t3 "Rest of star";
+
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
