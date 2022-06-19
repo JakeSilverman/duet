@@ -88,3 +88,5 @@ val eq_guided_qe : 'a context -> 'a formula -> 'a formula
 (** Similar to qe_mbp but does without conversion to prenex. Eliminates
  * quantifiers one at a time rather than block by block. *)
 val mbp_qe_inplace : 'a context -> 'a formula -> 'a formula
+
+val mbp_qe_inplace_old : 'a context -> 'a formula -> 'a formula

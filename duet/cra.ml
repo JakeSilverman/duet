@@ -1501,7 +1501,7 @@ let array_analyze file =
   
     let phi = Chc.Fp.query_vc_condition srk fp ad in
     Log.errorf "FOUND VC COND";
-  (*Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/VCCONDINIT.smt2";*)
+  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/VCCONDINIT.smt2";
 
   
   let phi = Syntax.eliminate_ite srk phi in

@@ -1303,7 +1303,7 @@ module OldPmfa = struct
         eqs
     in
 
-    let _ =
+    let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then
             Symbol.Map.add a b eqs_trs
@@ -1314,7 +1314,7 @@ module OldPmfa = struct
         (int_eqs srk tf)
     in
 
-    let eqs_ints_trs = Symbol.Map.empty in
+    (*let eqs_ints_trs = Symbol.Map.empty in*)
 
 
     let phi =
@@ -1367,8 +1367,7 @@ module OldPmfa = struct
  
 
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
-
-
+  
 
 
 
@@ -1405,7 +1404,6 @@ module OldPmfa = struct
 
 
   Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/new_ground.smt2";
-
 
       let ground_tf = TransitionFormula.make ~exists ground_lia (T.symbols lia_tf) in
       let iter_obj = Iter.abstract srk ground_tf in
@@ -1463,7 +1461,14 @@ module OldPmfa = struct
       in
       let write = mk_and srk [obj.ground_lia; mk_not srk arr_vars_eq] in
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in
-      
+
+     Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
+     Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
+
+
+
+
+
       let write = T.make write obj.iter_trs in
       let noop = T.make noop obj.iter_trs in
 
@@ -1536,8 +1541,13 @@ module OldPmfa = struct
       in
 
 
+     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstar_pre_mbp.smt2";
+
+
       (* TODO: make sure quants introduced *)
       let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
+
+     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost.smt2";
 
 
 
