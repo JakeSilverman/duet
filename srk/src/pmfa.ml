@@ -1255,6 +1255,7 @@ module OldPmfa = struct
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
         rev_map : (Symbol.t, Symbol.t) Hashtbl.t;
         eqs_trs : symbol Symbol.Map.t;
+        eqs_ints_trs : symbol Symbol.Map.t;
         iter_trs : (Symbol.t * Symbol.t) list;
         ground_lia : 'a formula;
         arr_only_trs : (symbol * symbol) list; }
@@ -1292,6 +1293,8 @@ module OldPmfa = struct
 
     let eqs = arr_eqs srk tf in
 
+    let trs = ref (T.symbols tf) in
+
     let eqs_trs =
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then
@@ -1305,10 +1308,12 @@ module OldPmfa = struct
 
     let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
-          if List.mem (a, b) (T.symbols tf) then
-            Symbol.Map.add a b eqs_trs
-          else if List.mem (b, a) (T.symbols tf) then
-            Symbol.Map.add a b eqs_trs
+          if List.mem (a, b) (T.symbols tf) then(
+            trs := BatList.remove !trs (a, b);
+            Symbol.Map.add a b eqs_trs)
+          else if List.mem (b, a) (T.symbols tf) then (
+            trs := BatList.remove !trs (b, a);
+            Symbol.Map.add b a eqs_trs)
           else eqs_trs)
         Symbol.Map.empty
         (int_eqs srk tf)
@@ -1330,17 +1335,18 @@ module OldPmfa = struct
     in
 
 
-      let exists = TransitionFormula.exists tf in
-      let phi = eliminate_stores srk phi in
-      let phi = eliminate_ite srk phi in
-      let phi = unbooleanize srk phi in
-     
+    let exists = TransitionFormula.exists tf in
+    let phi = eliminate_stores srk phi in
+    let phi = eliminate_ite srk phi in
+    let phi = unbooleanize srk phi in
 
-      let tf_pmfa = T.update_formula tf phi in
-      let proj_ind, proj_indpost, arr_map, rev_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
-      (*let tf_proj' =
-        substitute_sym 
-          srk
+
+    let tf_pmfa = T.update_formula tf phi in
+    let tf_pmfa = T.update_symbols tf_pmfa !trs in
+    let proj_ind, proj_indpost, arr_map, rev_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
+    (*let tf_proj' =
+      substitute_sym 
+        srk
           (fun s ->
              if Hashtbl.mem eqs_map s then (
                mk_const srk (Hashtbl.find eqs_map s))
@@ -1386,7 +1392,7 @@ module OldPmfa = struct
              eqs_trs
              []))
     in
-    let ground_lia = 
+(*    let ground_lia = 
       mk_and
         srk
         (ground_lia ::
@@ -1398,7 +1404,7 @@ module OldPmfa = struct
               :: acc)
              eqs_ints_trs
              []))
-    in
+    in*)
 
 
 
@@ -1416,6 +1422,7 @@ module OldPmfa = struct
        arr_map;
        rev_map;
        eqs_trs;
+       eqs_ints_trs;
        iter_trs=(T.symbols lia_tf);
        ground_lia;
        arr_only_trs;
@@ -1595,6 +1602,17 @@ module OldPmfa = struct
           []
       in
 
+
+    let eqs3 = 
+        Symbol.Map.fold (fun a b acc ->
+            mk_eq srk (mk_const srk a) (mk_const srk b) ::
+            acc)
+          obj.eqs_ints_trs
+          []
+      in
+
+
+
       let map sym =  
         if sym = obj.proj_ind || sym = obj.proj_indpost 
         then mk_var srk 0 `TyInt
@@ -1607,7 +1625,7 @@ module OldPmfa = struct
       let res = (mk_forall srk `TyInt substed) in
       let t2 = time "EXP OUT" in
       diff t1 t2 "EXP";
-      mk_and srk (res ::  eqs_2)
+      mk_and srk (res ::  (eqs_2 @ eqs3))
 
     let pp _ _ _= failwith "todo 10"
 

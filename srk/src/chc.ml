@@ -232,6 +232,7 @@ module Fp = struct
       let t3 = time "Star Fin" in
       diff t2 t3 "Rest of star";
 
+      Unix.sleep 5;
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
