@@ -2673,7 +2673,7 @@ let eq_guided_qe srk phi =
 
 
 
-let mbp_qe_inplace srk phi =
+let mbp_qe_inplace_old srk phi =
   let count = ref 0 in
   let qp, matr = normalize srk phi in
   let remove_quant quant_typ syms matr =
@@ -2687,6 +2687,7 @@ let mbp_qe_inplace srk phi =
   let qt, syms, matr =
     List.fold_right
       (fun (qt, sym) (quant_typ, syms, matr) ->
+         Log.errorf "MBP LOOPED";
          if quant_typ = None then (Some qt, [sym], matr)
          else if Option.get quant_typ = qt then (quant_typ, sym :: syms, matr)
          else (Some qt, [sym], remove_quant quant_typ syms matr))
@@ -2694,3 +2695,87 @@ let mbp_qe_inplace srk phi =
       (None, [], matr)
   in
   remove_quant qt syms matr
+
+
+
+let mbp_qe_inplace srk phi =
+  let elim (qfs, phi) =
+
+    match qfs with
+    | None -> phi
+    | Some (qtyp, num) ->
+      let syms_to_fvs = Hashtbl.create 97 in
+      let fvs_to_syms = Hashtbl.create 97 in
+      BatHashtbl.iter (fun ind typ ->
+          let typ : typ_fo = 
+            match typ with
+            | `TyInt -> `TyInt
+            | `TyReal -> `TyReal
+            | `TyArr -> `TyArr
+            | `TyBool -> `TyBool
+          in
+          let sym = mk_symbol srk (typ :> typ) in
+          BatHashtbl.add fvs_to_syms ind sym;
+          BatHashtbl.add syms_to_fvs sym (mk_var srk (ind - num - 1) typ))
+        (free_vars phi);
+      let phi' =
+        substitute
+          srk
+          (fun (ind, _) -> 
+             mk_const srk (Hashtbl.find fvs_to_syms ind))
+          phi
+      in
+      let elim_set =
+        BatEnum.fold (fun syms ind ->
+            if Hashtbl.mem fvs_to_syms ind then
+              Symbol.Set.add (Hashtbl.find fvs_to_syms ind) syms
+            else syms)
+          Symbol.Set.empty
+          (0 -- (num))
+      in
+      let phi'' = 
+        if qtyp = `Forall then
+          mk_not srk (mbp srk (fun sym -> not (Symbol.Set.mem sym elim_set)) (mk_not srk phi'))
+        else mbp srk (fun sym -> not (Symbol.Set.mem sym elim_set)) phi'
+      in
+
+      let res = 
+        substitute_const
+          srk
+          (fun s -> 
+             if Hashtbl.mem syms_to_fvs s
+             then
+               Hashtbl.find syms_to_fvs s
+             else mk_const srk s)
+          phi''
+      in
+      res
+  in
+
+  let alg = function
+    | `Tru -> (None, mk_true srk)
+    | `Fls -> (None, mk_false srk)
+    | `Atom c -> (None, Formula.construct srk (`Atom c))
+    | `And conjuncts ->
+      (None, mk_and srk (List.map elim conjuncts))
+    | `Or disjuncts ->
+     (None, mk_or srk (List.map elim disjuncts))
+    | `Quantify (`Exists, _, _, (qfs, phi)) ->
+     begin match qfs with
+       | None -> Some (`Exists, 0), phi
+       | Some (`Exists, n) -> Some (`Exists, n + 1), phi
+       | Some (`Forall, _) -> Some (`Exists, 0), elim (qfs, phi)
+     end
+    | `Quantify (`Forall, _, _, (qfs, phi)) ->
+     begin match qfs with
+       | None -> Some (`Forall, 0), phi
+       | Some (`Forall, n) -> Some (`Forall, n + 1), phi
+       | Some (`Exists, _) -> Some (`Forall, 0), elim (qfs, phi)
+     end
+    | `Not obj -> None, mk_not srk (elim obj)
+    | `Proposition (`Var i) -> None, mk_var srk i `TyBool
+    | `Proposition (`App (p, args)) -> None, mk_app srk p args
+    | `Ite _ -> assert false
+  in
+  let res = elim (Formula.eval srk alg phi) in
+  res
