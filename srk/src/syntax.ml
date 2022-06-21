@@ -1535,7 +1535,7 @@ let rec nnf_rewriter srk sexpr =
       | Node (Leq, [s; t], _) -> mk_lt srk t s
       | Node (Eq, [s; t], _) -> mk_or srk [mk_lt srk s t; mk_lt srk t s]
       | Node (Lt, [s; t], _) -> mk_leq srk t s
-      | Node (ArrEq, [s; t], _) ->
+      | Node (ArrEq, [s; t], _) -> assert (1 = 2);
         let s_i = mk_select srk (decapture srk 0 1 s) (mk_var srk 0 `TyInt) in
         let t_i = mk_select srk (decapture srk 0 1 t) (mk_var srk 0 `TyInt) in
         mk_exists 
