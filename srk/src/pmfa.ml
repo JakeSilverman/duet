@@ -1025,6 +1025,7 @@ module OldPmfa = struct
   module T = TransitionFormula
   include Log.Make(struct let name = "srk.array:" end)
 
+
   let arr_trs srk tf = 
     List.filter (fun (s, _) -> typ_symbol srk s = `TyArr) (T.symbols tf)
 
@@ -1038,46 +1039,55 @@ module OldPmfa = struct
    * are captured with the integer transition variables ([map] a, [map] a'). *)
   let projection srk tf eqs =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
-    let rev_map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let j = mk_symbol srk ~name:"j" `TyInt in
     let j' = mk_symbol srk ~name:"j'" `TyInt in
 
-    let f (trs, arr_only_trs, phi) (a, a') = 
-      let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
-      let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
-      let phi = 
-        if Symbol.Map.mem a eqs
-        then (
+    let f (trs, arr_only_trs, symb_consts, phi) (a, a') =
+      if Symbol.Map.mem a eqs then (
+        let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
+        let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
+        let phi = 
           mk_and 
             srk 
             [
-             mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
-             phi])
-        else
-          mk_and 
-            srk 
-            [mk_eq srk (mk_const srk z) (mk_select srk (mk_const srk a) (mk_const srk j));
-             mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
-             phi]
+              mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+              phi]
+        in
+        Hashtbl.add map z a;
+
+        Hashtbl.add map z' a';
+        trs,
+        arr_only_trs,
+        z' :: symb_consts,
+        phi
+      )
+      else (
+      let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
+      let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
+      let phi = 
+        mk_and 
+          srk 
+          [mk_eq srk (mk_const srk z) (mk_select srk (mk_const srk a) (mk_const srk j));
+           mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+           phi]
       in
 
 
       Hashtbl.add map z a;
       Hashtbl.add map z' a';
-      Hashtbl.add rev_map a z;
-      Hashtbl.add rev_map a' z';
       (z, z') :: trs,
       (z, z') :: arr_only_trs,
-      phi
+      symb_consts,
+      phi)
     in
-    let integer_trs, arr_only_trs, phi = 
-      List.fold_left f ((j, j') :: int_trs srk tf, [], T.formula tf) (arr_trs srk tf) 
+    let integer_trs, arr_only_trs, symb_consts, phi = 
+      List.fold_left f ((j, j') :: int_trs srk tf, [], [], T.formula tf) (arr_trs srk tf) 
     in
     (* TODO: Fix assumption that no symbolic constants *)
     let phi = 
-      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs)) phi 
+      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts) phi 
     in
-    j, j', map, rev_map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
+    j, j', map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
 
   (* Convert from a pmfa formula to an mfa formula.
    * We achieve this by converting the pmfa formula to an equivalent formula
@@ -1086,7 +1096,7 @@ module OldPmfa = struct
    * universal quantifiers. We factor the universal quantifier over disjunction
    * by introducing a new quantified integer sorted variable that acts a boolean
    * that determines which disjunct is "on".*)
-  let to_mfa srk tf =
+  let to_mfa srk phi =
     (* We first subsitute in for each existentially quantified variable
      * a new variable symbol. This results in each universal quantifier 
      * having debruijn index 0 and makes the merging function that follows
@@ -1108,7 +1118,7 @@ module OldPmfa = struct
           (fun (i, _) -> List.nth subst_lst i)
           (Formula.construct srk open_form)
     in
-    let phi = subst_existentials [] (T.formula tf) in
+    let phi = subst_existentials [] phi in
     let rec merge_univ merge_eqs expr =
       match Formula.destruct srk expr with
       | `Quantify (`Forall, _, `TyInt, phi) -> mk_and srk (phi :: merge_eqs)
@@ -1202,15 +1212,18 @@ module OldPmfa = struct
     mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi'
 
 
-  let pmfa_to_lia srk tf =
-    let tf = TransitionFormula.map_formula (eliminate_ite srk) tf in
-    let mfa, new_vars = to_mfa srk tf in
+  let pmfa_to_lia srk phi =
+
+
+    let phi = eliminate_ite srk phi in
+    let phi = rewrite srk ~down:(nnf_rewriter srk) phi in
+
+    let mfa, new_vars = to_mfa srk phi in
     let lia = mfa_to_lia srk mfa in
     let phi = 
       mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym new_vars))) lia
     in
-    T.make ~exists:(T.exists tf) phi (T.symbols tf)
-
+    phi
   
  (* Changes bool syms to int syms... when I wrote this some of the other functions
   * in this module failed with presence of booleans. Need to check if this is still the
@@ -1249,11 +1262,10 @@ module OldPmfa = struct
   module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) = struct
 
     type 'a t = 
-      { iter_obj : 'a Iter.t; 
+      { 
         proj_ind : Symbol.t;
         proj_indpost : Symbol.t;
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
-        rev_map : (Symbol.t, Symbol.t) Hashtbl.t;
         eqs_trs : symbol Symbol.Map.t;
         eqs_ints_trs : symbol Symbol.Map.t;
         iter_trs : (Symbol.t * Symbol.t) list;
@@ -1268,10 +1280,11 @@ module OldPmfa = struct
             | _ -> []
           end
         | `And conjuncts -> List.fold_left List.append [] conjuncts
+        | `Quantify (_, _, _, eqs) -> eqs
         | _ -> []
       in
       Formula.eval srk alg (T.formula tf)
-
+(*
     let int_eqs srk tf = 
       let alg = function
         | `Atom (`Arith (`Eq, a, b)) ->
@@ -1280,10 +1293,11 @@ module OldPmfa = struct
             | _ -> []
           end
         | `And conjuncts -> List.fold_left List.append [] conjuncts
+        | `Quantify (_, _, _, eqs) -> eqs
         | _ -> []
       in
       Formula.eval srk alg (T.formula tf)
-
+*)
 
 
     let abstract srk tf =
@@ -1297,18 +1311,18 @@ module OldPmfa = struct
 
     let eqs_trs =
       List.fold_left (fun eqs_trs (a, b) ->
-          if List.mem (a, b) (T.symbols tf) then
-            Symbol.Map.add a b eqs_trs
-          else if List.mem (b, a) (T.symbols tf) then
-            Symbol.Map.add a b eqs_trs
+          if List.mem (a, b) (T.symbols tf) then (
+            Symbol.Map.add a b eqs_trs)
+          else if List.mem (b, a) (T.symbols tf) then (
+            Symbol.Map.add b a eqs_trs)
           else eqs_trs)
         Symbol.Map.empty
         eqs
     in
-
+(*
     let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
-          if List.mem (a, b) (T.symbols tf) then(
+          if List.mem (a, b) (T.symbols tf) then (
             trs := BatList.remove !trs (a, b);
             Symbol.Map.add a b eqs_trs)
           else if List.mem (b, a) (T.symbols tf) then (
@@ -1317,9 +1331,9 @@ module OldPmfa = struct
           else eqs_trs)
         Symbol.Map.empty
         (int_eqs srk tf)
-    in
+    in*)
 
-    (*let eqs_ints_trs = Symbol.Map.empty in*)
+    let eqs_ints_trs = Symbol.Map.empty in
 
 
     let phi =
@@ -1335,7 +1349,6 @@ module OldPmfa = struct
     in
 
 
-    let exists = TransitionFormula.exists tf in
     let phi = eliminate_stores srk phi in
     let phi = eliminate_ite srk phi in
     let phi = unbooleanize srk phi in
@@ -1343,7 +1356,7 @@ module OldPmfa = struct
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, proj_indpost, arr_map, rev_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
+    let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
     (*let tf_proj' =
       substitute_sym 
         srk
@@ -1360,25 +1373,28 @@ module OldPmfa = struct
         in*)
 
 
-    let lia_tf = pmfa_to_lia srk tf_proj in
+    let lia = pmfa_to_lia srk (T.formula tf_proj) in
     (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
-    let lia = T.formula lia_tf in
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/liaprembp.smt2";
     let lia = 
       Quantifier.eq_guided_qe 
         srk
         (Quantifier.miniscope srk lia)
     in
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/liaminiedprembp.smt2";
  
+
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_preground.smt2";
+
+
 
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
   
+    Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
 
 
 
 
-    
+
+   (* 
     let ground_lia =
       mk_and
         srk
@@ -1391,7 +1407,7 @@ module OldPmfa = struct
               :: acc)
              eqs_trs
              []))
-    in
+    in*)
 (*    let ground_lia = 
       mk_and
         srk
@@ -1408,22 +1424,15 @@ module OldPmfa = struct
 
 
 
-
-  Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/new_ground.smt2";
-
-      let ground_tf = TransitionFormula.make ~exists ground_lia (T.symbols lia_tf) in
-      let iter_obj = Iter.abstract srk ground_tf in
-
       let exit_abst = time "Exit ABSTRACT" in
       diff t1 exit_abst "Exit Abstract";
-      {iter_obj;
+      {
        proj_ind;
        proj_indpost;
        arr_map;
-       rev_map;
        eqs_trs;
        eqs_ints_trs;
-       iter_trs=(T.symbols lia_tf);
+       iter_trs=(T.symbols tf_proj);
        ground_lia;
        arr_only_trs;
       }
@@ -1466,12 +1475,12 @@ module OldPmfa = struct
           srk
           (List.map (fun (z, z') -> mk_eq srk (mk_const srk z) (mk_const srk z')) obj.arr_only_trs)
       in
+
       let write = mk_and srk [obj.ground_lia; mk_not srk arr_vars_eq] in
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in
-
-     Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
-     Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
-
+      
+      Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
+      Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
 
 
 
@@ -1529,7 +1538,7 @@ module OldPmfa = struct
             srk 
             [mk_exists_consts 
                srk
-               (T.exists write_once)
+               (fun s -> (T.exists write_once s) && not (s = exp1) && not (s = exp2))
                (T.formula write_once); 
              lc_constr]
         )
@@ -1541,6 +1550,12 @@ module OldPmfa = struct
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
           obj.iter_trs
       in
+
+
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost_pre_mini.smt2";
+
+
+
       let nstarwnstar = 
         Quantifier.eq_guided_qe 
           srk
@@ -1548,7 +1563,7 @@ module OldPmfa = struct
       in
 
 
-     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstar_pre_mbp.smt2";
+     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost_pre_mbp.smt2";
 
 
       (* TODO: make sure quants introduced *)
@@ -1569,10 +1584,9 @@ module OldPmfa = struct
       in
 
 
-
+      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpre_mbp.smt2";
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
-
 
 
 

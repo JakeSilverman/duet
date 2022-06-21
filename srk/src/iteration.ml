@@ -312,7 +312,19 @@ module GuardedTranslation = struct
           && typ_symbol srk s' = `TyInt)
         (TF.symbols tf)
     in
-    (* [1, x0' - x0, ..., xn' - xn] *)
+    let flat_trs = List.flatten (List.map (fun (s, s') -> [s; s']) (TF.symbols tf)) in
+    let consts = 
+      Symbol.Set.fold (fun s pairs ->
+          if typ_symbol srk s = `TyInt
+          && (not (List.mem s flat_trs))
+          && TF.exists tf s 
+          then (s, s) :: pairs
+          else pairs)
+        (symbols (TF.formula tf))
+        []
+    in
+    let zz_symbols = zz_symbols @ consts in
+    (* [-1, x0' - x0, ..., xn' - xn] *)
     let delta =
       [mk_sub srk (mk_zero srk) (mk_one srk)]
       @(List.map (fun (s,s') ->
