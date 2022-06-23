@@ -932,15 +932,19 @@ let pos_bool_elim srk phi syms =
     phi
   in
 
-  substitute_const
-    srk
-    (fun s -> 
-       if Hashtbl.mem syms_to_fvs s
-       then
-         let ind, typ = Hashtbl.find syms_to_fvs s in
-         mk_var srk ind typ
-       else mk_const srk s)
-    phi
+  let phi = 
+    substitute_const
+      srk
+      (fun s -> 
+         if Hashtbl.mem syms_to_fvs s
+         then
+           let ind, typ = Hashtbl.find syms_to_fvs s in
+           mk_var srk ind typ
+         else mk_const srk s)
+      phi
+  in
+  phi
+
 
 (*
 let check_quants srk constr =
@@ -958,12 +962,15 @@ let check_quants srk constr =
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
   let fp' = 
-    Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
+    Fp.mapi_rules (fun ind (conc, hypo, constr) ->
+
         let phi', syms = skolemize_eh srk 0 constr in
+
         BatHashtbl.add skolemized_vars ind syms;
         conc, hypo, phi')
       fp
   in
+
   let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
     determine_offsets srk fp'
   in
@@ -987,19 +994,22 @@ let offset_analysis srk fp =
             (fun sym -> not (Symbol.Set.mem sym (BatHashtbl.find skolemized_vars ind)))
             constr
         in
+
         conc, hypo, constr')
       fp''
   in
+
+
   let fp'3 = 
     Fp.map_rules (fun (conc, hypo, constr) ->
-        Log.errorf "Constr here is %a \n" (Formula.pp srk) constr;
         let constr'' = Quantifier.miniscope srk constr in
         let constr' =
           Quantifier.eq_guided_qe 
             srk
             constr''
         in
-
+        Log.errorf "Formula AFTER EQG here is %a\n" (Formula.pp srk) constr';
+ 
  
         conc, hypo, constr')
       fp'3
@@ -1305,19 +1315,29 @@ module OldPmfa = struct
 
       Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/arraysmttests/checking_eqs.smt2";
 
-    let eqs = arr_eqs srk tf in
+      let phi = 
+        Quantifier.eq_guided_qe 
+          srk
+          (T.formula tf)
+      in
 
-    let trs = ref (T.symbols tf) in
+      Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/withEQ.smt2";
 
-    let eqs_trs =
-      List.fold_left (fun eqs_trs (a, b) ->
-          if List.mem (a, b) (T.symbols tf) then (
-            Symbol.Map.add a b eqs_trs)
-          else if List.mem (b, a) (T.symbols tf) then (
-            Symbol.Map.add b a eqs_trs)
-          else eqs_trs)
-        Symbol.Map.empty
-        eqs
+
+
+      let eqs = arr_eqs srk tf in
+
+      let trs = ref (T.symbols tf) in
+
+      let eqs_trs =
+        List.fold_left (fun eqs_trs (a, b) ->
+            if List.mem (a, b) (T.symbols tf) then (
+              Symbol.Map.add a b eqs_trs)
+            else if List.mem (b, a) (T.symbols tf) then (
+              Symbol.Map.add b a eqs_trs)
+            else eqs_trs)
+          Symbol.Map.empty
+          eqs
     in
 (*
     let eqs_ints_trs =

@@ -2323,16 +2323,18 @@ let local_project_cube srk exists model cube =
 
 
 (* Integer maps with a constant time "decrement all keys by k" operation *)
-(*module DecMap = struct
+module IncMap = struct
   let empty = BatMap.empty,0
-  let add k v (map, c) = (BatMap.add (k - c) v map), c
-  let remove k (map, c) = BatMap.remove (k - c) map, c
-  let dec k (map, c) = map, c - k
-  let mem k (map, c) = BatMap.mem (k - c) map
-  let union dmap1 (m2, c2)= 
-    BatMap.foldi (fun k v m -> add (k + c2) v m) m2 dmap1
-  let of_enum e = BatMap.of_enum e, 0
-end*)
+  let add k v (map, c) = (BatMap.add (k + c) v map), c
+  (*let remove k (map, c) = BatMap.remove (k - c) map, c*)
+  let inc k (map, c) = map, c + k
+  (*let mem k (map, c) = BatMap.mem (k - c) map*)
+  let map f (m, c) = BatMap.map f m, c
+  let find k (map, c) = BatMap.find (k + c) map
+  (*let union dmap1 (m2, c2)= 
+    BatMap.foldi (fun k v m -> add (k + c2) v m) m2 dmap*)
+  (*let of_enum e = BatMap.of_enum e, 0*)
+end
 
 let miniscope srk phi : 'a formula =
   (* The miniscoping procedure works in two phases:
@@ -2495,7 +2497,7 @@ let get_subst_candidate srk eqs qt_infos =
   if List.length candidates = 0 then None
   else Some (List.hd candidates)
 
-let eq_guided_qe srk phi =
+let eq_guided_qe_new srk phi =
   let phi = Syntax.eliminate_ite srk phi in
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2515,6 +2517,7 @@ let eq_guided_qe srk phi =
           phi
       in
       let perform_bool_substs =
+        Log.errorf "sub terms";
         BatList.fold_lefti (fun (eqs, diseqs, phi) ind (_, typ) ->
             let sub_pairs lst term = 
               List.map
@@ -2525,6 +2528,7 @@ let eq_guided_qe srk phi =
               if BatSet.Int.mem ind fv_tru &&
                  not (BatSet.Int.mem ind fv_fls) then (
                 let cand_term = mk_true srk in
+                Log.errorf "SUBST phi";
                 let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
@@ -2533,6 +2537,7 @@ let eq_guided_qe srk phi =
               else if BatSet.Int.mem ind fv_fls &&
                       not (BatSet.Int.mem ind fv_tru) then (
                 let cand_term = mk_false srk in
+                Log.errorf "SUBST phi";
                 let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
@@ -2571,6 +2576,7 @@ let eq_guided_qe srk phi =
           in
           let eqs_filt = filter_pairs eqs in
           let diseqs_filt = filter_pairs diseqs in
+          Log.errorf "sub terms";
           let shift_terms phi =
             substitute srk (fun (ind, typ) ->
                 mk_var srk (ind - (List.length qt_infos)) typ)
@@ -2595,6 +2601,7 @@ let eq_guided_qe srk phi =
           let eqs' = sub_pairs eqs in
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
+          Log.errorf "SUBST phi";
           let phi' = subst phi ind term' in
           perform_subst
             cands'
@@ -2673,6 +2680,193 @@ let eq_guided_qe srk phi =
   let block, eqs, diseqs, fv_tru, fv_fls, phi2 = Formula.eval srk alg phi in
   let _, _, _, _, phi' = apply_quant_block block eqs diseqs fv_tru fv_fls phi2 in
   phi'
+
+
+
+
+(* Given a list of equalities, find a candidate
+ * term to substitute in for var 0 *)
+let get_subst_cands srk eqs = 
+  let candidates = 
+    List.filter_map (fun (t1, t2) ->
+        match Term.destruct srk t1, Term.destruct srk t2 with
+        | `Var(ind, _), _ when ind = 0 ->
+          if not (Hashtbl.mem (free_vars t2) ind)
+          then Some (t2)
+          else None
+        | _, `Var(ind, _) when ind = 0 ->
+          if not (Hashtbl.mem (free_vars t1) ind) 
+          then Some (t1)
+          else None
+        | _, _ ->  None) eqs
+  in
+  if List.length candidates = 0 then None
+  else Some (List.hd candidates)
+
+
+let eq_guided_qe srk phi =
+  let phi = Syntax.eliminate_ite srk phi in
+  let intersect _ = [] in
+  let union lsts = List.flatten lsts in
+
+  let subst phi cand_term =
+    substitute srk (fun (ind, typ) ->
+        if ind = 0 then cand_term
+        else mk_var srk (ind - 1) typ)
+      phi
+  in
+
+  let find_subst typ eqs diseqs fv_tru fv_fls  =
+    let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
+    let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+    let replacement =
+      match typ with
+      | `TyBool ->
+        if BatSet.Int.mem 0 fv_tru &&
+           not (BatSet.Int.mem 0 fv_fls) then (
+          Some (mk_true srk :> ('a, typ_fo) expr ))
+        else if BatSet.Int.mem 0 fv_fls &&
+                not (BatSet.Int.mem 0 fv_tru) then (
+          Some (mk_false srk :> ('a, typ_fo) expr ))
+        else None
+      | _ -> 
+        begin match get_subst_cands srk eqs with
+        | None -> None
+        | Some v -> Some (v :>('a, typ_fo) expr) 
+        end
+    in
+    match replacement with
+    | None ->
+      let filter_pairs lst = 
+        List.filter (fun (t1, t2) ->
+            let fvt1 = free_vars t1 in
+            let fvt2 = free_vars t2 in
+            (not (Hashtbl.mem fvt1 0)) &&
+            (not (Hashtbl.mem fvt2 0)))
+          lst
+      in
+      let eqs_filt = filter_pairs eqs in
+      let diseqs_filt = filter_pairs diseqs in
+      let shift_terms phi =
+        substitute srk (fun (ind, typ) ->
+            mk_var srk (ind - 1) typ)
+          phi
+      in
+      let sub_pairs lst = 
+        List.map
+          (fun (t1, t2) -> shift_terms t1, shift_terms t2) 
+          lst
+      in
+      let eqs' = sub_pairs eqs_filt in
+      let diseqs' = sub_pairs diseqs_filt in
+      replacement, eqs', diseqs', fv_tru', fv_fls' 
+    | Some v ->
+      (* mk_false should never be substitutable here *)
+      let term' = subst v (mk_false srk) in
+      let sub_pairs lst = 
+        List.map
+          (fun (t1, t2) -> subst t1 term', subst t2 term') 
+          lst
+      in
+      let eqs' = sub_pairs eqs in
+      let diseqs' = sub_pairs diseqs in
+      replacement, eqs', diseqs', fv_tru', fv_fls'
+  in
+
+  let emp = BatSet.Int.empty in
+  let alg = function
+    | `Tru -> [], [], emp, emp, `Atom (mk_true srk)
+    | `Fls -> [], [], emp, emp, `Atom (mk_false srk)
+    | `Atom (`Arith (`Eq, x, y)) -> 
+      [(x :> 'a term), (y :> 'a term)], [], emp, emp, `Atom ( mk_eq srk x y)
+    | `Atom (`ArrEq (a, b)) ->
+      [(a :> 'a term), (b :> 'a term)], [], emp, emp, `Atom (mk_arr_eq srk a b)
+    | `Atom (`Arith (`Lt, x, y)) -> [], [], emp, emp, `Atom (mk_lt srk x y)
+    | `Atom (`Arith (`Leq, x, y)) -> [], [], emp, emp, `Atom (mk_leq srk x y)
+    | `And conjuncts ->
+      let (eqs, diseqs, fv_trus, fv_flss, conjs) = 
+        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, conjs) 
+                         (eq, diseq, fv_tru, fv_fls, conj) ->
+            eq :: eqs, diseq :: diseqs, 
+            BatSet.Int.union fv_trus fv_tru, 
+            BatSet.Int.union fv_flss fv_fls,
+            conj :: conjs)
+          ([], [], emp, emp, [])
+          conjuncts
+      in
+      union eqs, intersect diseqs, fv_trus, fv_flss, `And conjs
+    | `Or disjuncts ->
+      let (eqs, diseqs, fv_trus, fv_flss, disjs) = 
+        List.fold_left (fun (eqs, diseqs, fv_trus, fv_flss, disjs) 
+                         (eq, diseq, fv_tru, fv_fls, disj) ->
+             eq :: eqs, diseq :: diseqs,
+             (* Why should this be union *)
+             BatSet.Int.union fv_trus fv_tru, 
+             BatSet.Int.union fv_flss fv_fls,
+             disj :: disjs)
+          ([], [], emp, emp, [])
+          disjuncts
+       in
+       intersect eqs, union diseqs, fv_trus, fv_flss, `Dis disjs
+    | `Quantify (qtyp, name, typ, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
+      let replacement, eqs', diseqs', fv_tru', fv_fls' = find_subst typ eqs diseqs fv_tru fv_fls in
+      eqs', diseqs', fv_tru', fv_fls', `Quant (replacement, qtyp, name, typ, phi)
+    | `Not (eqs, diseqs, fv_trus, fv_flss, phi) -> 
+     diseqs, eqs, fv_flss, fv_trus, `Not phi
+    | `Proposition (`Var ind) -> 
+      [], [], BatSet.Int.singleton ind, emp, `Atom (mk_var srk ind `TyBool)
+    | `Proposition (`App (f, args)) -> 
+      [], [], emp, emp, `Atom (mk_app srk f args)
+    | `Ite _ -> assert false (* TODO: I think prev vers had bug with inter *)
+    | _ -> assert false
+  in
+  let _, _, _, _, deconstructed = Formula.eval srk alg phi in
+
+  let rec reconstruct map ele =
+    match ele with
+    | `Quant (replacement, qtyp, name, typ, phi) ->
+      let map = IncMap.inc 1 map in
+      begin match replacement with
+        | None ->
+          let map : (int, (('a, typ_fo) expr)) BatMap.t * int = 
+            IncMap.map (fun f ->
+                substitute
+                  srk
+                  (fun (ind, typ) -> mk_var srk (ind + 1) typ)
+                  f)
+              map
+          in
+          let map = IncMap.add 0 (mk_var srk 0 typ) map in
+          let mk_qtyp f = if f = `Exists then mk_exists else mk_forall in 
+          (mk_qtyp qtyp) srk ~name typ (reconstruct map phi)
+        | Some v ->
+          let v' =
+            substitute
+              srk
+              (fun (ind, _) -> IncMap.find ind map)
+              v
+          in
+          let map = IncMap.add 0 v' map in
+          reconstruct map phi
+
+      end
+    | `Not phi -> mk_not srk (reconstruct map phi)
+    | `And cons -> mk_and srk (List.map (reconstruct map) cons) 
+    | `Dis dis -> mk_or srk (List.map (reconstruct map) dis)
+    | `Atom phi ->
+      substitute
+        srk
+        (fun (ind, _) -> IncMap.find ind map)
+        phi
+  in
+  let map =
+    BatHashtbl.fold (fun ind typ map ->
+        IncMap.add ind (mk_var srk ind typ) map)
+      (free_vars phi)
+      IncMap.empty
+  in
+  reconstruct map deconstructed
+
 
 
 
