@@ -158,6 +158,8 @@ module Fp = struct
              else mk_var srk (ind - num_p_cy) typ)
           phiy
       in
+      let tsub1 = time "Sub 1" in
+      diff t1 tsub1 "Sub 1";
       let phix' =
         substitute
           srk
@@ -167,15 +169,20 @@ module Fp = struct
              else mk_var srk (ind + num_p_cy) typ)
           phix
       in
+      let tsub2 = time "sub 2" in
+      diff tsub1 tsub2 "sub 2";
       let phi' =
         List.fold_left (fun phi (name, typ) ->
             mk_exists srk ~name typ phi)
           (mk_and srk [phix'; phiy'])
           p_hy
       in
+      let t_closure = time "exists" in
+      diff tsub2 t_closure "closure";
       let phi'' = Quantifier.eq_guided_qe srk phi' in
       index := !index + 1;
       let t2 = time "Mul done" in
+      diff t_closure t2 "eq guided";
       diff t1 t2 "Mul";
       Edge (p_cy, p_hx, phi'')
 
@@ -232,7 +239,6 @@ module Fp = struct
       let t3 = time "Star Fin" in
       diff t2 t3 "Rest of star";
 
-      Unix.sleep 5;
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
