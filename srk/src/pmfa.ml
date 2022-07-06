@@ -8,8 +8,8 @@ let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-let diff _ _ _ = ()
-  (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
+let diff t1 t2 s = 
+  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
 
 let typ_symbol_fo srk sym =
     match typ_symbol srk sym with
@@ -959,6 +959,55 @@ let check_quants srk constr =
     Log.errorf "Constr with quant is %a \n" (Formula.pp srk) constr
   else ()*)
 
+let better_bool_elim srk phi vars =
+
+  let syms_to_fvs = Hashtbl.create 97 in
+  let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+      let sym = mk_symbol srk (typ :> typ) in
+      Hashtbl.add syms_to_fvs sym ind; 
+      sym) 
+  in
+  let phi' = 
+    substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) phi
+  in
+  let bools_to_terms = Hashtbl.create 97 in
+  let atoms_to_bools = Memo.memo (fun atom -> 
+      let sym = mk_symbol srk `TyBool in
+      Hashtbl.add bools_to_terms sym (Formula.construct srk (`Atom atom));  
+      sym) 
+  in
+  let _ = 
+    (Symbol.Set.filter (fun sym -> typ_symbol srk sym = `TyBool) vars)
+  in
+ 
+
+
+  let boolize = function
+    | `Tru -> mk_true srk
+    | `Fls -> mk_false srk
+    | `Atom (atom) -> mk_const srk (atoms_to_bools atom)
+    | `Not a -> mk_not srk a
+    | `And conjuncts -> mk_and srk conjuncts
+    | `Or disjuncts -> mk_or srk disjuncts
+    | `Proposition (`App (sym, [])) -> mk_const srk sym
+    | `Proposition _ -> assert false
+    | `Ite _ -> assert false
+    | `Quantify _ -> assert false
+  in
+  let boolized_phi = Formula.eval srk boolize phi' in
+  Log.errorf "BEFORE MBP is %a\n" (Formula.pp srk) boolized_phi;
+  (*let phi'' = Quantifier.mbp srk (fun sym -> not (Symbol.Set.mem sym bools)) boolized_phi in*)
+  (*List.iter (fun s -> 
+      Log.errorf "tactic is %s\n" s;
+      Log.errorf "tactic does \n %s\n" (Z3.Tactic.get_tactic_description (Z3.mk_context []) s)
+    
+    ) (Z3.Tactic.get_tactic_names (Z3.mk_context []));
+  let phi'' = SrkZ3.z3_of_formula srk (Z3.mk_context []) phi'' in*)
+  (*Log.errorf "AFTER MBP is %a\n" (Formula.pp srk) phi'';*)
+  boolized_phi
+ 
+
+
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
   let fp' = 
@@ -985,6 +1034,18 @@ let offset_analysis srk fp =
   in
 
 
+  let _ = 
+    Fp.mapi_rules (fun ind (conc, hypo, constr) ->
+        Log.errorf "BEFORE BETTER BOOL IS %a\n" (Formula.pp srk) constr;
+        let constr' =  better_bool_elim srk constr (Hashtbl.find skolemized_vars ind) in
+        Log.errorf "AFTER BOOL IS %a\n" (Formula.pp srk) constr';
+        conc, hypo, constr')
+      fp''
+  in
+
+  assert (1 = 2);
+
+
   (* Unskolemize *)
   let fp'3 = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
@@ -1009,7 +1070,14 @@ let offset_analysis srk fp =
             constr''
         in
         Log.errorf "Formula AFTER EQG here is %a\n" (Formula.pp srk) constr';
- 
+        let constr' =
+          Quantifier.eq_guided_qe 
+            srk
+            constr'
+        in
+        Log.errorf "Formula AFTER EQG NEW here is %a\n" (Formula.pp srk) constr';
+
+
  
         conc, hypo, constr')
       fp'3
@@ -1047,7 +1115,7 @@ module OldPmfa = struct
   (* Projects an array transition formula [tf] down to a single symbolic index
    * [j]. The dynamics of element [j] of array transition variables (a, a') 
    * are captured with the integer transition variables ([map] a, [map] a'). *)
-  let projection srk tf eqs =
+  let projection srk tf eqs extras =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let j = mk_symbol srk ~name:"j" `TyInt in
     let j' = mk_symbol srk ~name:"j'" `TyInt in
@@ -1095,7 +1163,7 @@ module OldPmfa = struct
     in
     (* TODO: Fix assumption that no symbolic constants *)
     let phi = 
-      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts) phi 
+      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts || Symbol.Set.mem sym extras) phi 
     in
     j, j', map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
 
@@ -1294,7 +1362,7 @@ module OldPmfa = struct
         | _ -> []
       in
       Formula.eval srk alg (T.formula tf)
-(*
+
     let int_eqs srk tf = 
       let alg = function
         | `Atom (`Arith (`Eq, a, b)) ->
@@ -1307,7 +1375,7 @@ module OldPmfa = struct
         | _ -> []
       in
       Formula.eval srk alg (T.formula tf)
-*)
+
 
 
     let abstract srk tf =
@@ -1339,7 +1407,7 @@ module OldPmfa = struct
           Symbol.Map.empty
           eqs
     in
-(*
+
     let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then (
@@ -1351,10 +1419,16 @@ module OldPmfa = struct
           else eqs_trs)
         Symbol.Map.empty
         (int_eqs srk tf)
-    in*)
+    in
 
-    let eqs_ints_trs = Symbol.Map.empty in
+    (*let eqs_ints_trs = Symbol.Map.empty in*)
 
+    let new_eqs_consts =
+      BatEnum.fold (fun set ele ->
+          Symbol.Set.add ele set)
+        Symbol.Set.empty
+        (Symbol.Map.values eqs_ints_trs)
+    in
 
     let phi =
       substitute_sym 
@@ -1376,7 +1450,7 @@ module OldPmfa = struct
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs in
+    let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs new_eqs_consts in
     (*let tf_proj' =
       substitute_sym 
         srk
@@ -1393,7 +1467,10 @@ module OldPmfa = struct
         in*)
 
 
+
     let lia = pmfa_to_lia srk (T.formula tf_proj) in
+
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_pre_mini.smt2";
     (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
     let lia = 
       Quantifier.eq_guided_qe 
@@ -1409,7 +1486,6 @@ module OldPmfa = struct
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
   
     Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
-
 
 
 
@@ -1497,13 +1573,31 @@ module OldPmfa = struct
       in
 
       let write = mk_and srk [obj.ground_lia; mk_not srk arr_vars_eq] in
+      let polka = Polka.manager_alloc_loose () in
+      let write =
+       rewrite srk ~down:(nnf_rewriter srk) write
+      in
+      let conv = 
+        SrkApron.formula_of_property 
+          (Abstract.abstract 
+             srk 
+             ~exists:(fun s -> Symbol.Set.mem s (symbols write)) 
+             polka 
+             write) 
+      in
+      (*let aff_hull = Abstract.affine_hull srk write (Symbol.Set.elements (symbols write)) in
+      let aff_hull = List.map (fun s -> mk_eq srk (mk_zero srk) s) aff_hull in*)
+      let write2 = conv in
+
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in
       
       Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
+      Syntax.to_file srk write2 "/Users/jakesilverman/Documents/arraysmttests/write2.smt2";
+ 
       Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
 
 
-
+      let write = write2 in
 
       let write = T.make write obj.iter_trs in
       let noop = T.make noop obj.iter_trs in
