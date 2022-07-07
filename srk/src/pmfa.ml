@@ -49,7 +49,7 @@ module CVSet = BatSet.Make(CHCVar)
 let determine_eq_int_fvs srk constr fvcands =
   let syms_to_fvs = Hashtbl.create 97 in
   let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
-      let sym = mk_symbol srk (typ :> typ) in
+      let sym = mk_symbol srk ~name:"DET EQS" (typ :> typ) in
       if BatSet.Int.mem ind fvcands 
       then Hashtbl.add syms_to_fvs sym ind 
       else ();
@@ -354,7 +354,7 @@ let skolemize srk phi =
   let decapture_tbl = BatHashtbl.create 97 in
   let subst = 
     Memo.memo (fun (ind, typ) ->
-        let sym = mk_symbol srk (typ :> typ) in
+        let sym = mk_symbol srk ~name:"SKOLEM" (typ :> typ) in
         BatHashtbl.add decapture_tbl sym ind;
         mk_const srk sym)
   in
@@ -872,7 +872,7 @@ let skolemize_eh_chc srk fp =
     | `Atom (`Arith (op, x, y)) ->
       (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
     | `Atom(`ArrEq (a, b)) -> 
-      let index = mk_symbol srk `TyInt in
+      let index = mk_symbol srk ~name:"INDEX" `TyInt in
       let lhs = rewrite_store (mk_const srk index) a in
       let rhs = rewrite_store (mk_const srk index) b in
       mk_forall_const srk index (mk_eq srk lhs rhs)
@@ -886,7 +886,7 @@ let pos_bool_elim srk phi syms =
   let bool_fvs = ref Symbol.Set.empty in
   let syms_to_fvs = Hashtbl.create 97 in
   let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
-      let sym = mk_symbol srk (typ :> typ) in
+      let sym = mk_symbol srk ~name:"POS_BOOL" (typ :> typ) in
       if typ = `TyBool
       then bool_fvs := Symbol.Set.add sym !bool_fvs
       else ();
@@ -959,7 +959,7 @@ let check_quants srk constr =
     Log.errorf "Constr with quant is %a \n" (Formula.pp srk) constr
   else ()*)
 
-let better_bool_elim srk phi vars =
+(*let _ srk phi vars =
 
   let syms_to_fvs = Hashtbl.create 97 in
   let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
@@ -1005,7 +1005,7 @@ let better_bool_elim srk phi vars =
   let phi'' = SrkZ3.z3_of_formula srk (Z3.mk_context []) phi'' in*)
   (*Log.errorf "AFTER MBP is %a\n" (Formula.pp srk) phi'';*)
   boolized_phi
- 
+ *)
 
 
 let offset_analysis srk fp =
@@ -1034,17 +1034,14 @@ let offset_analysis srk fp =
   in
 
 
-  let _ = 
+  (*let _ = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) ->
         Log.errorf "BEFORE BETTER BOOL IS %a\n" (Formula.pp srk) constr;
         let constr' =  better_bool_elim srk constr (Hashtbl.find skolemized_vars ind) in
         Log.errorf "AFTER BOOL IS %a\n" (Formula.pp srk) constr';
         conc, hypo, constr')
       fp''
-  in
-
-  assert (1 = 2);
-
+  in*)
 
   (* Unskolemize *)
   let fp'3 = 
@@ -1064,25 +1061,22 @@ let offset_analysis srk fp =
   let fp'3 = 
     Fp.map_rules (fun (conc, hypo, constr) ->
         let constr'' = Quantifier.miniscope srk constr in
+        Log.errorf "BEFORE EQG here is %a\n" (Formula.pp srk) constr'';
+
         let constr' =
           Quantifier.eq_guided_qe 
             srk
             constr''
         in
-        Log.errorf "Formula AFTER EQG here is %a\n" (Formula.pp srk) constr';
-        let constr' =
-          Quantifier.eq_guided_qe 
-            srk
-            constr'
-        in
         Log.errorf "Formula AFTER EQG NEW here is %a\n" (Formula.pp srk) constr';
 
+        let constr' = Quantifier.eq_guided_elim_loop srk constr' in
+        Log.errorf "Formula AFTER DUMB FACTOR here is %a\n" (Formula.pp srk) constr';
 
  
         conc, hypo, constr')
       fp'3
   in
-
 
   let fp'3 =check_q_array_chc srk fp'3 in
 
@@ -1218,7 +1212,7 @@ module OldPmfa = struct
   let mfa_to_lia srk body =
     (* We replace the univ. quant variable with a symbol to simplify the rest
      * of [mfa_to_lia].*)
-    let uq_sym = mk_symbol srk `TyInt in
+    let uq_sym = mk_symbol srk ~name:"UQSYM"`TyInt in
     let uq_term = mk_const srk uq_sym in
     let body = 
       substitute srk (fun (i, _) -> if i = 0 then uq_term else assert false) body 
@@ -1248,7 +1242,7 @@ module OldPmfa = struct
     let non_uq_read : 'c * 'd -> 'a arith_term =
       Memo.memo (fun (arr, read) -> 
           Hashtbl.add func_consist_reqs arr read;
-          let sym = mk_symbol srk `TyInt in
+          let sym = mk_symbol srk ~name:"NON_EQ_RE" `TyInt in
           nuqr_syms := Symbol.Set.add sym !nuqr_syms;
           mk_const srk sym)
     in
@@ -1287,7 +1281,8 @@ module OldPmfa = struct
       mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !uqr_syms)) matrix 
     in
     let phi' = mk_forall_const srk uq_sym phi' in
-    mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi'
+    let phi' = mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi' in
+    phi', !nuqr_syms
 
 
   let pmfa_to_lia srk phi =
@@ -1297,12 +1292,13 @@ module OldPmfa = struct
     let phi = rewrite srk ~down:(nnf_rewriter srk) phi in
 
     let mfa, new_vars = to_mfa srk phi in
-    let lia = mfa_to_lia srk mfa in
-    let phi = 
+    let lia, syms = mfa_to_lia srk mfa in
+    let lia = 
       mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym new_vars))) lia
     in
-    phi
-  
+    lia, Symbol.Set.union syms new_vars
+
+
  (* Changes bool syms to int syms... when I wrote this some of the other functions
   * in this module failed with presence of booleans. Need to check if this is still the
   * case if not just fix this. This function messes with types of tr_symbols are that
@@ -1348,7 +1344,8 @@ module OldPmfa = struct
         eqs_ints_trs : symbol Symbol.Map.t;
         iter_trs : (Symbol.t * Symbol.t) list;
         ground_lia : 'a formula;
-        arr_only_trs : (symbol * symbol) list; }
+        arr_only_trs : (symbol * symbol) list;
+        skolems : Symbol.Set.t }
 
     let arr_eqs srk tf = 
       let alg = function
@@ -1375,6 +1372,44 @@ module OldPmfa = struct
         | _ -> []
       in
       Formula.eval srk alg (T.formula tf)
+
+
+
+    let skolemize_eh_alt srk phi =
+      let rec subst_existentials subst_lst syms expr =
+        match Formula.destruct srk expr with
+        | `Quantify (`Exists, name, typ, phi) ->
+          let sym = mk_symbol srk ~name (typ :> typ) in
+          let syms' = Symbol.Set.add sym syms in
+          subst_existentials (sym :: subst_lst) syms' phi
+        | `And conjuncts ->
+          let phis, symss =  
+            (List.map (subst_existentials subst_lst Symbol.Set.empty) conjuncts)
+            |> BatList.split
+          in
+          mk_and srk phis,
+          List.fold_left Symbol.Set.union syms symss
+        | `Or disjuncts ->
+          let phis, symss =  
+            (List.map (subst_existentials subst_lst Symbol.Set.empty) disjuncts)
+            |> BatList.split
+          in
+          mk_or srk phis,
+          List.fold_left Symbol.Set.union syms symss
+        | open_form ->
+          (* TODO: make substitute more efficient *)
+          substitute
+            srk
+            (fun (i, typ) ->
+               if List.length subst_lst > i 
+               then mk_const srk (List.nth subst_lst i)
+               else mk_var srk (i - List.length subst_lst) typ)
+            (Formula.construct srk open_form),
+          syms
+      in
+      let phi', syms = subst_existentials [] Symbol.Set.empty phi in
+      phi', syms
+
 
 
 
@@ -1468,15 +1503,21 @@ module OldPmfa = struct
 
 
 
-    let lia = pmfa_to_lia srk (T.formula tf_proj) in
-
+    let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
     Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_pre_mini.smt2";
     (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
+    Log.errorf "PRE EQ MINI";
     let lia = 
       Quantifier.eq_guided_qe 
         srk
         (Quantifier.miniscope srk lia)
     in
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_skolemize_eh.smt2";
+
+
+    let lia, skolems = skolemize_eh_alt srk lia in 
+
+    Log.errorf "POST EQ MINI";
  
 
     Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_preground.smt2";
@@ -1487,7 +1528,7 @@ module OldPmfa = struct
   
     Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
 
-
+    Log.errorf "POST MBP";
 
 
    (* 
@@ -1531,6 +1572,7 @@ module OldPmfa = struct
        iter_trs=(T.symbols tf_proj);
        ground_lia;
        arr_only_trs;
+       skolems
       }
      
    (* let at_most_single_write srk write noop trs =
@@ -1577,19 +1619,41 @@ module OldPmfa = struct
       let write =
        rewrite srk ~down:(nnf_rewriter srk) write
       in
+      let rewrite_time = time "EXP IN" in
+      diff t1 rewrite_time "REWRITE"; 
+
       let conv = 
         SrkApron.formula_of_property 
           (Abstract.abstract 
              srk 
-             ~exists:(fun s -> Symbol.Set.mem s (symbols write)) 
+             ~exists:(fun s -> Symbol.Set.mem s (symbols write) && not (Symbol.Set.mem s obj.skolems))
              polka 
              write) 
       in
       (*let aff_hull = Abstract.affine_hull srk write (Symbol.Set.elements (symbols write)) in
       let aff_hull = List.map (fun s -> mk_eq srk (mk_zero srk) s) aff_hull in*)
       let write2 = conv in
+      Log.errorf "Write is %a" (Formula.pp srk) write2;
 
-      let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in
+      let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
+      
+      let polka = Polka.manager_alloc_loose () in
+      let noop =
+        rewrite srk ~down:(nnf_rewriter srk) noop
+      in
+      let conv = 
+        SrkApron.formula_of_property 
+          (Abstract.abstract 
+             srk 
+             ~exists:(fun s -> Symbol.Set.mem s (symbols noop) && not (Symbol.Set.mem s obj.skolems)) 
+             polka 
+             noop) 
+      in
+
+      Log.errorf "NOOP is %a" (Formula.pp srk) conv;
+
+
+      (*let noop = conv in*)
       
       Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
       Syntax.to_file srk write2 "/Users/jakesilverman/Documents/arraysmttests/write2.smt2";
@@ -1598,15 +1662,19 @@ module OldPmfa = struct
 
 
       let write = write2 in
+      let exists s = not (Symbol.Set.mem s obj.skolems) in
+      let write = T.make ~exists write obj.iter_trs in
+      let noop = T.make ~exists noop obj.iter_trs in
+      let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
+      let exp2 = mk_symbol srk ~name:"exp2" `TyInt in
 
-      let write = T.make write obj.iter_trs in
-      let noop = T.make noop obj.iter_trs in
+      let prenstar = time "prenstar" in
 
+      diff rewrite_time prenstar "prenstar";
+      
       let nstarwnstar = 
         if at_most_single_write srk write noop obj.iter_trs 
         then (
-          let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
-          let exp2 = mk_symbol srk ~name:"exp2" `TyInt in
           let noop_star1 =
             T.make
               (Iter.exp
@@ -1659,6 +1727,11 @@ module OldPmfa = struct
         else assert false
       in
 
+      let nstar = time "nstar" in
+
+      diff prenstar nstar "nstar";
+
+
       let noop_eqs = 
         List.map 
           (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
@@ -1669,7 +1742,12 @@ module OldPmfa = struct
       Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost_pre_mini.smt2";
 
 
-
+      let nstarwnstar =
+        mk_exists_const srk exp1 nstarwnstar
+      in
+      let nstarwnstar =
+        mk_exists_const srk exp2 nstarwnstar
+      in
       let nstarwnstar = 
         Quantifier.eq_guided_qe 
           srk
@@ -1686,21 +1764,42 @@ module OldPmfa = struct
      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost.smt2";
 
 
+     let nstarmbp = time "nstar" in
+
+     diff nstar nstarmbp "nstarmbp";
+
+
 
       let nstar =
         Iter2.exp
            srk 
            obj.iter_trs 
            lc
-           (Iter2.abstract 
+           (Iter2.abstract
               srk 
               noop)
       in
+
+      let nstar2 =
+        Iter.exp
+          srk 
+          obj.iter_trs 
+          lc
+          (Iter.abstract
+             srk 
+             noop)
+      in
+      let nstar = mk_and srk [nstar2; nstar] in
 
 
       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpre_mbp.smt2";
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
+      
+      let nstarreal = time "nstarreal" in
+
+      diff nstarmbp nstarreal "nstar real";
+
 
 
 
@@ -1738,6 +1837,10 @@ module OldPmfa = struct
           obj.eqs_ints_trs
           []
       in
+
+      let all_but_map = time "abp" in
+
+      diff nstarreal all_but_map "all but map";
 
 
 

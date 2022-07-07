@@ -85,6 +85,12 @@ val eq_guided_qe : 'a context -> 'a formula -> 'a formula
 
 val eq_guided_qe_new : 'a context -> 'a formula -> 'a formula
 
+(*val eq_guided_qe_alt : 'a context -> 'a formula -> 'a formula*)
+
+val dumb_factor : 'a context -> 'a formula -> 'a formula
+
+val eq_guided_elim_loop : 'a context -> 'a formula -> 'a formula
+
 
 
 (** Similar to qe_mbp but does without conversion to prenex. Eliminates

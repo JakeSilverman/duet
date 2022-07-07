@@ -2325,12 +2325,15 @@ let local_project_cube srk exists model cube =
 (* Integer maps with a constant time "decrement all keys by k" operation *)
 module IncMap = struct
   let empty = BatMap.empty,0
-  let add k v (map, c) = (BatMap.add (k + c) v map), c
+  let add k v (map, c) = (BatMap.add (k - c) v map), c
   (*let remove k (map, c) = BatMap.remove (k - c) map, c*)
   let inc k (map, c) = map, c + k
   (*let mem k (map, c) = BatMap.mem (k - c) map*)
   let map f (m, c) = BatMap.map f m, c
-  let find k (map, c) = BatMap.find (k + c) map
+  let find k (map, c) = BatMap.find (k - c) map
+  (*let pp srk (map, c) = 
+    Log.errorf "C is %n\n" c;
+    BatMap.iter (fun s k -> Log.errorf "%n maps to something %a" (s - c) (Expr.pp srk) k) map*)
   (*let union dmap1 (m2, c2)= 
     BatMap.foldi (fun k v m -> add (k + c2) v m) m2 dmap*)
   (*let of_enum e = BatMap.of_enum e, 0*)
@@ -2478,6 +2481,7 @@ let miniscope srk phi : 'a formula =
 
 (* Given a list of equalities, find a candidate
  * term to substitute in for var 0 *)
+    (* TODO: check is linear instead of curr method*)
 let get_subst_candidate srk eqs qt_infos = 
   let candidates = 
     List.filter_map (fun (t1, t2) ->
@@ -2517,7 +2521,6 @@ let eq_guided_qe_new srk phi =
           phi
       in
       let perform_bool_substs =
-        Log.errorf "sub terms";
         BatList.fold_lefti (fun (eqs, diseqs, phi) ind (_, typ) ->
             let sub_pairs lst term = 
               List.map
@@ -2528,7 +2531,6 @@ let eq_guided_qe_new srk phi =
               if BatSet.Int.mem ind fv_tru &&
                  not (BatSet.Int.mem ind fv_fls) then (
                 let cand_term = mk_true srk in
-                Log.errorf "SUBST phi";
                 let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
@@ -2537,7 +2539,6 @@ let eq_guided_qe_new srk phi =
               else if BatSet.Int.mem ind fv_fls &&
                       not (BatSet.Int.mem ind fv_tru) then (
                 let cand_term = mk_false srk in
-                Log.errorf "SUBST phi";
                 let phi' = subst cand_term ind phi in
                 let eqs' = sub_pairs eqs cand_term in
                 let diseqs' = sub_pairs diseqs cand_term in
@@ -2576,7 +2577,6 @@ let eq_guided_qe_new srk phi =
           in
           let eqs_filt = filter_pairs eqs in
           let diseqs_filt = filter_pairs diseqs in
-          Log.errorf "sub terms";
           let shift_terms phi =
             substitute srk (fun (ind, typ) ->
                 mk_var srk (ind - (List.length qt_infos)) typ)
@@ -2601,7 +2601,6 @@ let eq_guided_qe_new srk phi =
           let eqs' = sub_pairs eqs in
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
-          Log.errorf "SUBST phi";
           let phi' = subst phi ind term' in
           perform_subst
             cands'
@@ -2704,7 +2703,8 @@ let get_subst_cands srk eqs =
   else Some (List.hd candidates)
 
 
-let eq_guided_qe srk phi =
+let eq_guided_qe_helper srk phi =
+  let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2761,6 +2761,7 @@ let eq_guided_qe srk phi =
       let diseqs' = sub_pairs diseqs_filt in
       replacement, eqs', diseqs', fv_tru', fv_fls' 
     | Some v ->
+      changed := true;
       (* mk_false should never be substitutable here *)
       let term' = subst v (mk_false srk) in
       let sub_pairs lst = 
@@ -2854,6 +2855,8 @@ let eq_guided_qe srk phi =
     | `And cons -> mk_and srk (List.map (reconstruct map) cons) 
     | `Dis dis -> mk_or srk (List.map (reconstruct map) dis)
     | `Atom phi ->
+      (*Log.errorf "failing on %a" (Formula.pp srk) phi;
+      IncMap.pp srk map;*)
       substitute
         srk
         (fun (ind, _) -> IncMap.find ind map)
@@ -2865,11 +2868,92 @@ let eq_guided_qe srk phi =
       (free_vars phi)
       IncMap.empty
   in
-  reconstruct map deconstructed
+  let res = reconstruct map deconstructed in
+  res, !changed
 
 
+let eq_guided_qe srk phi = fst (eq_guided_qe_helper srk phi)
+ 
+
+type 'a dumb_factor_typ = Phi of 'a formula | Disj of 'a formula * 'a formula
+let dumb_factor srk  phi =
+  let phiize dumb_factor =
+    match dumb_factor with
+    | Phi phi -> phi
+    | Disj (phi1, phi2) -> mk_or srk [phi1; phi2]
+  in
+  let alg = function
+    | `And conjs ->
+      let mode disjs =
+        let term_count = BatHashtbl.create 97 in
+        List.iter (fun (disj1, disj2) ->
+            BatHashtbl.replace
+              term_count
+              disj1
+               ((BatHashtbl.find_default
+                  term_count
+                  disj1
+                  0) + 1);
+            BatHashtbl.replace
+              term_count
+              disj2
+              ((BatHashtbl.find_default
+                 term_count
+                 disj2
+                 0) + 1))
+          disjs;
+        fst 
+          (BatHashtbl.fold (fun term amnt (max_term, max_amnt) ->
+               if amnt > max_amnt then (term, amnt) else (max_term, max_amnt))
+              term_count
+              (fst (List.hd disjs), -1))
+      in
+      let phis, disjs =
+        BatList.partition_map (fun fact_typ ->
+            match fact_typ with
+            | Phi phi -> Left phi
+            | Disj (phi1, phi2) -> Right (phi1, phi2))
+          conjs
+      in
+      let rec factor_disjs disjs =
+        match disjs with
+        | [] -> []
+        | _ ->
+          let mode_term = mode disjs in
+          let disjs', disjs_w_mode_term =
+            BatList.partition_map (fun (disj1, disj2) ->
+                if disj1 = mode_term then Right disj2
+                else if disj2 = mode_term then Right disj1
+                else Left (disj1, disj2))
+              disjs
+          in
+         (mk_or srk [mode_term; mk_and srk disjs_w_mode_term]) ::
+         (factor_disjs disjs')
+      in
+      let disjs_factored = factor_disjs disjs in
+      Phi (mk_and srk (phis @ disjs_factored))
+    | `Or disjs ->
+      let disjs = List.map phiize disjs in
+      begin match disjs with
+        | [dis1; dis2] -> Disj (dis1, dis2) 
+        | tl -> Phi (mk_or srk tl)
+      end
+    | phi -> Phi (Formula.map_construct srk phiize phi)
+  in
+  phiize (Formula.eval srk alg phi)
 
 
+let eq_guided_elim_loop srk phi =
+  let rec helper phi count =
+    assert (count <= 10);
+    let phi = miniscope srk phi in
+    let phi = dumb_factor srk phi in
+    let phi = miniscope srk phi in
+
+    let phi, changed = eq_guided_qe_helper srk phi in
+    if changed then helper phi (count + 1) else phi
+  in
+  helper phi 0
 
 let mbp_qe_inplace_old srk phi =
   let count = ref 0 in
@@ -2885,7 +2969,6 @@ let mbp_qe_inplace_old srk phi =
   let qt, syms, matr =
     List.fold_right
       (fun (qt, sym) (quant_typ, syms, matr) ->
-         Log.errorf "MBP LOOPED";
          if quant_typ = None then (Some qt, [sym], matr)
          else if Option.get quant_typ = qt then (quant_typ, sym :: syms, matr)
          else (Some qt, [sym], remove_quant quant_typ syms matr))
