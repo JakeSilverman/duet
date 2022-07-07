@@ -158,8 +158,8 @@ module Fp = struct
              else mk_var srk (ind - num_p_cy) typ)
           phiy
       in
-      let tsub1 = time "Sub 1" in
-      diff t1 tsub1 "Sub 1";
+      let _ = time "Sub 1" in
+      (*diff t1 tsub1 "Sub 1";*)
       let phix' =
         substitute
           srk
@@ -169,20 +169,20 @@ module Fp = struct
              else mk_var srk (ind + num_p_cy) typ)
           phix
       in
-      let tsub2 = time "sub 2" in
-      diff tsub1 tsub2 "sub 2";
+      let _ = time "sub 2" in
+      (*diff tsub1 tsub2 "sub 2";*)
       let phi' =
         List.fold_left (fun phi (name, typ) ->
             mk_exists srk ~name typ phi)
           (mk_and srk [phix'; phiy'])
           p_hy
       in
-      let t_closure = time "exists" in
-      diff tsub2 t_closure "closure";
+      let _ = time "exists" in
+      (*diff tsub2 t_closure "closure";*)
       let phi'' = Quantifier.eq_guided_qe srk phi' in
       index := !index + 1;
       let t2 = time "Mul done" in
-      diff t_closure t2 "eq guided";
+      (*diff t_closure t2 "eq guided";*)
       diff t1 t2 "Mul";
       Edge (p_cy, p_hx, phi'')
 
@@ -216,7 +216,7 @@ module Fp = struct
           phi
       in
       let module PD = (val pd : Iteration.PreDomain) in
-      let lc = mk_symbol srk `TyInt in
+      let lc = mk_symbol srk ~name:"LC" `TyInt in
       let tf = TransitionFormula.make ~exists phi trs in
       let phi' = PD.exp srk trs (mk_const srk lc) (PD.abstract srk tf) in
       let t2 = time "Star Starred" in
@@ -230,6 +230,13 @@ module Fp = struct
              | None -> mk_const srk sym)
           phi'
       in
+
+      let phi' =
+        Syntax.mk_exists_const
+          srk
+          lc
+          phi'
+      in
       
       let phi' =
         Quantifier.eq_guided_qe 
@@ -238,7 +245,7 @@ module Fp = struct
       in
       let t3 = time "Star Fin" in
       diff t2 t3 "Rest of star";
-
+      if t3 -. t1 > 100.0 then assert false else ();
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
