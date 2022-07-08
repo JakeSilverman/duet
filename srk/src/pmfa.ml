@@ -1112,7 +1112,6 @@ module OldPmfa = struct
   let projection srk tf eqs extras =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let j = mk_symbol srk ~name:"j" `TyInt in
-    let j' = mk_symbol srk ~name:"j'" `TyInt in
 
     let f (trs, arr_only_trs, symb_consts, phi) (a, a') =
       if Symbol.Map.mem a eqs then (
@@ -1153,13 +1152,13 @@ module OldPmfa = struct
       phi)
     in
     let integer_trs, arr_only_trs, symb_consts, phi = 
-      List.fold_left f ((j, j') :: int_trs srk tf, [], [], T.formula tf) (arr_trs srk tf) 
+      List.fold_left f (int_trs srk tf, [], [], T.formula tf) (arr_trs srk tf) 
     in
     (* TODO: Fix assumption that no symbolic constants *)
     let phi = 
-      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts || Symbol.Set.mem sym extras) phi 
+      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts || Symbol.Set.mem sym extras || sym = j) phi 
     in
-    j, j', map, T.make (mk_and srk [phi; mk_eq srk (mk_const srk j) (mk_const srk j')]) integer_trs, arr_only_trs 
+    j, map, T.make phi integer_trs, arr_only_trs 
 
   (* Convert from a pmfa formula to an mfa formula.
    * We achieve this by converting the pmfa formula to an equivalent formula
@@ -1338,7 +1337,6 @@ module OldPmfa = struct
     type 'a t = 
       { 
         proj_ind : Symbol.t;
-        proj_indpost : Symbol.t;
         arr_map : (Symbol.t, Symbol.t) Hashtbl.t;
         eqs_trs : symbol Symbol.Map.t;
         eqs_ints_trs : symbol Symbol.Map.t;
@@ -1514,7 +1512,7 @@ module OldPmfa = struct
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, proj_indpost, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs new_eqs_consts in
+    let proj_ind, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs new_eqs_consts in
     (*let tf_proj' =
       substitute_sym 
         srk
@@ -1552,7 +1550,6 @@ module OldPmfa = struct
       diff t1 exit_abst "Exit Abstract";
       {
        proj_ind;
-       proj_indpost;
        arr_map;
        eqs_trs;
        eqs_ints_trs;
@@ -1801,7 +1798,7 @@ module OldPmfa = struct
 
 
       let map sym =  
-        if sym = obj.proj_ind || sym = obj.proj_indpost 
+        if sym = obj.proj_ind
         then mk_var srk 0 `TyInt
         else if Hashtbl.mem obj.arr_map sym 
         then mk_select srk (mk_const srk (Hashtbl.find obj.arr_map sym)) 
