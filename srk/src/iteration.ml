@@ -237,8 +237,16 @@ module GuardedTranslation = struct
       (Formula.pp srk)
       (substitute srk (fun (i, _) -> gt.simulation.(i)) gt.guard);
     Format.fprintf formatter "@]"
+  let time _ =
+    let t = Unix.gettimeofday () in
+    (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
+
+  let diff t1 t2 s = 
+    Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+
 
   let abstract srk tf =
+    let abs_enter = time "abs" in
     let zz_symbols = (* int-sorted transition symbols *)
       List.filter (fun (s,s') ->
           typ_symbol srk s = `TyInt
@@ -285,6 +293,7 @@ module GuardedTranslation = struct
         ([], [])
         (Abstract.vanishing_space srk (TF.formula tf) delta)
     in
+    let guard_make = time "g" in
     (* exists x,x'. F(x,x') /\ Sx = y *)
     let guard =
       let fresh_symbols =
@@ -296,16 +305,46 @@ module GuardedTranslation = struct
           Symbol.Map.empty
           fresh_symbols
       in
+      let eq_subs = Hashtbl.create 97 in
       let sx_eq_y =
-        List.map2 (fun s t -> mk_eq srk (mk_const srk s) t) fresh_symbols simulation
+        List.map2 (fun s t -> 
+            begin match ArithTerm.destruct srk t with 
+            | `App (t_s, []) -> Hashtbl.add eq_subs t_s (mk_const srk s) 
+            | _ -> ()
+            end;
+            mk_eq srk (mk_const srk s) t) 
+          fresh_symbols 
+          simulation
       in
+      let phi =
+        substitute_const
+          srk
+          (fun s -> if Hashtbl.mem eq_subs s then Hashtbl.find eq_subs s else mk_const srk s)
+          (mk_and srk ((TF.formula tf)::sx_eq_y))
+      in
+      (*let mbped = phi in
+      Syntax.to_file srk mbped "/Users/jakesilverman/Documents/arraysmttests/GUARD.smt2";
+
+      Log.errorf "mbp printed";
+      let mped_post = 
+        Quantifier.mbp
+        srk
+        (fun x -> Symbol.Map.mem x sym_to_var)
+        phi
+      in
+      Syntax.to_file srk mped_post "/Users/jakesilverman/Documents/arraysmttests/guarded_trans.smt2";
+*)
       Quantifier.mbp
         srk
         (fun x -> Symbol.Map.mem x sym_to_var)
-        (mk_and srk ((TF.formula tf)::sx_eq_y))
+        phi
       |> substitute_map srk sym_to_var
       |> SrkSimplify.simplify_dda srk
     in
+    
+    let abs_exit = time "abs exot" in
+    diff guard_make abs_exit "making guard";
+    diff abs_enter abs_exit "GUARDED TRANS ABS";
     { simulation = Array.of_list simulation;
       translation = Array.of_list translation;
       guard = guard }
@@ -320,6 +359,7 @@ module GuardedTranslation = struct
     |> mk_and srk
 
   let exp srk tr_symbols loop_counter gt =
+    let exp_ent = time "exp enter" in
     let post_map = (* map pre-state vars to post-state vars *)
       TF.post_map srk tr_symbols
     in
@@ -352,6 +392,8 @@ module GuardedTranslation = struct
     let delta i =
       mk_sub srk (postify gt.simulation.(i)) (gt.simulation.(i))
     in
+    let exp_ext = time "exp exp" in
+    diff exp_ent exp_ext "GUARDED exp";
     mk_and srk
       [guard;
        exp_translation srk delta loop_counter gt]

@@ -1413,10 +1413,31 @@ module OldPmfa = struct
 
 
 
+    let squash_eq_adds srk phi =
+      let squash_add term =
+        begin match ArithTerm.destruct srk term with
+        | `Add [a; b] ->
+          begin match ArithTerm.destruct srk a, ArithTerm.destruct srk b with
+            | `Unop (`Neg, a_d), _ -> if a_d = b then mk_zero srk else term
+            | _, `Unop (`Neg, b_d) -> if a = b_d then mk_zero srk else term
+            | _, _ -> term
+          end
+        | _ -> term
+        end
+      in
+      let alg = function
+        | `Atom (`Arith (`Eq, a, b)) -> mk_eq srk (squash_add a) (squash_add b)
+        | open_phi -> Formula.construct srk open_phi
+      in
+      Formula.eval srk alg phi
+
+
+
     let abstract srk tf =
       let t1 = time "In abstract" in
 
       Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/arraysmttests/checking_eqs.smt2";
+
 
       let phi = 
         Quantifier.eq_guided_qe 
@@ -1478,6 +1499,14 @@ module OldPmfa = struct
     in
 
 
+    let phi = squash_eq_adds srk phi in
+    let phi = Quantifier.miniscope srk phi in
+
+    Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/SQUASHED.smt2";
+
+
+
+
     let phi = eliminate_stores srk phi in
     let phi = eliminate_ite srk phi in
     let phi = unbooleanize srk phi in
@@ -1505,59 +1534,17 @@ module OldPmfa = struct
 
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
     Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_pre_mini.smt2";
-    (*let lia = Quantifier.eg_simplification srk (T.formula lia_tf) in*)
-    Log.errorf "PRE EQ MINI";
     let lia = 
       Quantifier.eq_guided_qe 
         srk
         (Quantifier.miniscope srk lia)
     in
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_skolemize_eh.smt2";
-
 
     let lia, skolems = skolemize_eh_alt srk lia in 
-
-    Log.errorf "POST EQ MINI";
- 
-
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_preground.smt2";
-
-
 
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
   
     Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
-
-    Log.errorf "POST MBP";
-
-
-   (* 
-    let ground_lia =
-      mk_and
-        srk
-        (ground_lia ::
-         (Symbol.Map.fold (fun a b acc ->
-              (mk_eq
-                 srk
-                 (mk_const srk (Hashtbl.find rev_map a))
-                 (mk_const srk (Hashtbl.find rev_map b)))
-              :: acc)
-             eqs_trs
-             []))
-    in*)
-(*    let ground_lia = 
-      mk_and
-        srk
-        (ground_lia ::
-         (Symbol.Map.fold (fun a b acc ->
-              (mk_eq
-                 srk
-                 (mk_const srk a)
-                 (mk_const srk b))
-              :: acc)
-             eqs_ints_trs
-             []))
-    in*)
 
 
 
@@ -1630,14 +1617,11 @@ module OldPmfa = struct
              polka 
              write) 
       in
-      (*let aff_hull = Abstract.affine_hull srk write (Symbol.Set.elements (symbols write)) in
-      let aff_hull = List.map (fun s -> mk_eq srk (mk_zero srk) s) aff_hull in*)
-      let write2 = conv in
-      Log.errorf "Write is %a" (Formula.pp srk) write2;
+      let write = conv in
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
       
-      let polka = Polka.manager_alloc_loose () in
+      (*let polka = Polka.manager_alloc_loose () in
       let noop =
         rewrite srk ~down:(nnf_rewriter srk) noop
       in
@@ -1648,20 +1632,9 @@ module OldPmfa = struct
              ~exists:(fun s -> Symbol.Set.mem s (symbols noop) && not (Symbol.Set.mem s obj.skolems)) 
              polka 
              noop) 
-      in
-
-      Log.errorf "NOOP is %a" (Formula.pp srk) conv;
+      in*)
 
 
-      (*let noop = conv in*)
-      
-      Syntax.to_file srk write "/Users/jakesilverman/Documents/arraysmttests/write.smt2";
-      Syntax.to_file srk write2 "/Users/jakesilverman/Documents/arraysmttests/write2.smt2";
- 
-      Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
-
-
-      let write = write2 in
       let exists s = not (Symbol.Set.mem s obj.skolems) in
       let write = T.make ~exists write obj.iter_trs in
       let noop = T.make ~exists noop obj.iter_trs in
@@ -1739,8 +1712,6 @@ module OldPmfa = struct
       in
 
 
-      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost_pre_mini.smt2";
-
 
       let nstarwnstar =
         mk_exists_const srk exp1 nstarwnstar
@@ -1753,9 +1724,6 @@ module OldPmfa = struct
           srk
           (Quantifier.miniscope srk nstarwnstar)
       in
-
-
-     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost_pre_mbp.smt2";
 
 
       (* TODO: make sure quants introduced *)
@@ -1780,19 +1748,7 @@ module OldPmfa = struct
               noop)
       in
 
-      let nstar2 =
-        Iter.exp
-          srk 
-          obj.iter_trs 
-          lc
-          (Iter.abstract
-             srk 
-             noop)
-      in
-      let nstar = mk_and srk [nstar2; nstar] in
 
-
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpre_mbp.smt2";
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
       
