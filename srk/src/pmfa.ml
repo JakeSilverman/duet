@@ -1410,7 +1410,70 @@ module OldPmfa = struct
 
 
 
+    let squash_eq_adds srk phi =
+      let arith_alg = function
+        | `Add terms ->
+          let terms' = 
+            List.fold_left (fun terms summand ->
+                match ArithTerm.destruct srk summand with
+                | `Add t -> t @ terms
+                | _ -> summand :: terms)
+              []
+              terms
+          in
 
+          let terms_map = 
+            List.fold_left (fun map term ->
+                match ArithTerm.destruct srk term with
+                | `Unop (`Neg, t) -> 
+                  BatMap.PMap.modify_def
+                    0
+                    t
+                    (fun c -> c - 1)
+                    map
+                | _ -> 
+                  BatMap.PMap.modify_def
+                    0
+                    term
+                    (fun c -> c + 1)
+                    map)
+              BatMap.PMap.empty
+              terms'
+          in
+          let terms' =
+          BatMap.PMap.foldi (fun term count terms -> 
+              if count = 0 then terms
+              else if count = 1 then term :: terms
+              else if count = (-1) then (mk_neg srk term) :: terms
+              else (mk_mul srk [(mk_int srk count); term]) :: terms)
+            terms_map
+            []
+          in
+          let res = mk_add srk terms' in
+          res
+        | term -> ArithTerm.construct srk term
+      in
+      let mk_op op =
+        match op with
+        | `Eq -> mk_eq
+        | `Lt -> mk_lt
+        | `Leq -> mk_leq
+      in
+      let arr_alg = function 
+        | `Store (a, b, c) -> 
+          mk_store srk a (ArithTerm.eval srk arith_alg b) (ArithTerm.eval srk arith_alg c)
+        | term -> ArrTerm.construct srk term
+      in
+      let alg = function
+        | `Atom (`Arith (op, a, b)) -> 
+          (mk_op op) srk (ArithTerm.eval srk arith_alg a) (ArithTerm.eval srk arith_alg b)
+        | `Atom (`ArrEq (a, b)) -> mk_arr_eq srk (ArrTerm.eval srk arr_alg a) (ArrTerm.eval srk arr_alg b) 
+        | open_phi -> Formula.construct srk open_phi
+      in
+      Formula.eval srk alg phi
+
+
+(*
     let squash_eq_adds srk phi =
       let squash_add term =
         begin match ArithTerm.destruct srk term with
@@ -1428,7 +1491,7 @@ module OldPmfa = struct
         | open_phi -> Formula.construct srk open_phi
       in
       Formula.eval srk alg phi
-
+*)
 
 
     let abstract srk tf =
@@ -1617,8 +1680,13 @@ module OldPmfa = struct
       let write = conv in
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
-      
-      (*let polka = Polka.manager_alloc_loose () in
+
+      Log.errorf "NOOP IS %a" (Formula.pp srk) noop;
+      Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
+
+
+
+      let polka = Polka.manager_alloc_loose () in
       let noop =
         rewrite srk ~down:(nnf_rewriter srk) noop
       in
@@ -1626,17 +1694,53 @@ module OldPmfa = struct
         SrkApron.formula_of_property 
           (Abstract.abstract 
              srk 
-             ~exists:(fun s -> Symbol.Set.mem s (symbols noop) && not (Symbol.Set.mem s obj.skolems)) 
+             ~exists:(fun s -> Symbol.Set.mem s (symbols noop) (*&& not (Symbol.Set.mem s obj.skolems)*)) 
              polka 
              noop) 
-      in*)
+      in
+      (*let noop = conv in*)
+      Log.errorf "NOOP CONV IS %a" (Formula.pp srk) conv;
+     Syntax.to_file srk conv "/Users/jakesilverman/Documents/arraysmttests/noop_conv.smt2";
 
+      Symbol.Set.iter (fun s -> Log.errorf "Sym is skolem %a" (pp_symbol srk) s) obj.skolems;
 
       let exists s = not (Symbol.Set.mem s obj.skolems) in
       let write = T.make ~exists write obj.iter_trs in
       let noop = T.make ~exists noop obj.iter_trs in
       let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
       let exp2 = mk_symbol srk ~name:"exp2" `TyInt in
+(*
+      let trs_flat = List.flatten (List.map (fun (s, s') -> [s; s']) obj.iter_trs) in
+
+      let consts = 
+        BatList.filter (fun s ->
+
+            Log.errorf "Checking %a" (pp_symbol srk) s;
+            if (Symbol.Set.mem s obj.skolems) || List.mem s trs_flat then false else true)
+          (Symbol.Set.elements (symbols (T.formula noop))) 
+      in
+      let consts_trs, eqs =
+        BatList.split (
+          BatList.map (fun s -> 
+              let s' = mk_symbol srk ~name:(show_symbol srk s) (typ_symbol srk s) in
+              (s, s'), (mk_eq srk (mk_const srk s) (mk_const srk s')))
+            consts)
+      in
+      let fake_trs = (T.symbols noop) @ consts_trs in
+      let fake_noop = mk_and srk ((T.formula noop) :: eqs) in
+      let noop2 = T.make ~exists fake_noop fake_trs in 
+
+
+
+      let vas = Vas.Monotone.abstract srk noop2 in
+      Log.errorf "VAS is MONO %a" (Vas.Monotone.pp srk (T.symbols noop2)) vas;
+
+      let vas_phi = Vas.gamma2 srk vas (T.symbols noop2) in 
+
+      Log.errorf "VAS GAMMA %a" (Formula.pp srk) vas_phi;
+*)
+
+
 
       let prenstar = time "prenstar" in
 
@@ -1745,6 +1849,19 @@ module OldPmfa = struct
               noop)
       in
 
+      let nstar2 =
+        Iter.exp
+          srk 
+          obj.iter_trs 
+          lc
+          (Iter.abstract
+             srk 
+             noop)
+      in
+
+      let nstar = mk_and srk [nstar; nstar2] in
+
+
 
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
@@ -1809,7 +1926,10 @@ module OldPmfa = struct
       let res = (mk_forall srk `TyInt substed) in
       let t2 = time "EXP OUT" in
       diff t1 t2 "EXP";
-      mk_and srk (res ::  (eqs_2 @ eqs3))
+      let res = mk_and srk (res ::  (eqs_2 @ eqs3)) in
+      Syntax.to_file srk res "/Users/jakesilverman/Documents/arraysmttests/exp_res.smt2";
+      res
+      
 
     let pp _ _ _= failwith "todo 10"
 
