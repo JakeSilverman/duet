@@ -56,7 +56,7 @@ module OldPmfa : sig
   val projection :  
     'a context -> 'a T.t  -> 'a Syntax.Symbol.Map.t ->
     Syntax.Symbol.Set.t ->
-    symbol * symbol * (symbol, symbol) Hashtbl.t * 'a T.t * (symbol * symbol) list
+    symbol * (symbol, symbol) Hashtbl.t * 'a T.t * (symbol * symbol) list
 
   module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) : sig
     include PreDomain
