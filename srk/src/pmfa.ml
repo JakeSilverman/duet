@@ -1647,14 +1647,235 @@ module OldPmfa = struct
       | `Unsat -> true
       | `Unknown -> failwith "at most single unknown"
 *)
- 
+(* 
     let at_most_single_write _ _ _ _ =
       true
-     
+  *)  
+
+
+    type 'a dir_var = Inc of 'a arith_term * 'a arith_term | Dec of 'a arith_term * 'a arith_term
+
+    (* Determines which trs in phi are monotonically increasing/decreasing *)
+    let directional_vars srk phi trs =
+      List.flatten (
+        List.filter_map (fun (x, x') ->
+            let xt, xt' = mk_const srk x, mk_const srk x' in
+            match Smt.entails srk phi (mk_leq srk xt xt'), 
+                  Smt.entails srk phi (mk_leq srk xt' xt) with
+            | `Yes, `Yes -> Some [Inc (xt, xt'); Dec (xt, xt')]
+            | `Yes, _ -> Some [Inc (xt, xt')]
+            | _, `Yes -> Some [Dec (xt, xt')]
+            | _ -> None)
+          trs)
+
+    let create_phased_exps srk phi trs symb_index directs lc skolems =
+      let exp1term = mk_symbol srk ~name:"exp1" `TyInt in
+      let exp2term = mk_symbol srk ~name:"exp2" `TyInt in
+      List.map (fun direction ->
+          match direction with
+          | Inc (x, x') ->
+            Log.errorf "INC TERM is %a" (ArithTerm.pp srk) x;
+            let j = mk_const srk symb_index in
+
+            let phase1 = mk_and srk [phi; mk_leq srk x j; mk_leq srk x' j] in
+            let polka = Polka.manager_alloc_loose () in
+            let phase1 =
+              rewrite srk ~down:(nnf_rewriter srk) phase1
+            in
+
+            let conv = 
+              SrkApron.formula_of_property 
+                (Abstract.abstract 
+                   srk 
+                   ~exists:(fun s -> Symbol.Set.mem s (symbols phase1) && not (Symbol.Set.mem s skolems))
+                   polka 
+                   phase1) 
+            in
+            let phase1_single = conv in
+            Log.errorf "PHASE 1 is %a" (Formula.pp srk) phase1_single;
+            let exists s = not (Symbol.Set.mem s skolems) in
+            let phase1_single_tr = T.make ~exists phase1_single trs in
+ 
+
+
+            let phase2 = mk_and srk [phi;  mk_lt srk j x; mk_lt srk j x'] in
+            let polka = Polka.manager_alloc_loose () in
+            let phase2 =
+              rewrite srk ~down:(nnf_rewriter srk) phase2
+            in
+
+            let conv = 
+              SrkApron.formula_of_property 
+                (Abstract.abstract 
+                   srk 
+                   ~exists:(fun s -> Symbol.Set.mem s (symbols phase2) && not (Symbol.Set.mem s skolems))
+                   polka 
+                   phase2) 
+            in
+            Log.errorf "Phase 2 non conv is %a" (Formula.pp srk) phase2;
+            let phase2_single = conv in
+            Log.errorf "PHASE 2 is %a" (Formula.pp srk) phase2_single;
+            let phase2_single_tr = T.make ~exists phase2_single trs in
+
+
+
+            let phase1 = 
+              T.make 
+                (mk_and srk 
+                   [Iter.exp
+                      srk 
+                      trs 
+                      (mk_const 
+                         srk 
+                         exp1term) 
+                      (Iter.abstract 
+                         srk
+                         phase1_single_tr);
+                    mk_leq srk x j; mk_leq srk x' j])
+                trs
+            in
+            let phase2 =
+              T.make
+                (mk_and srk 
+                   [Iter.exp
+                      srk 
+                      trs 
+                      (mk_const 
+                         srk 
+                         exp2term)
+                      (Iter.abstract 
+                         srk
+                         phase2_single_tr);
+                    mk_lt srk j x; mk_lt srk j x'])
+                trs
+            in
+
+            let inter = mk_and srk [phi;  mk_leq srk x j; mk_lt srk j x'] in
+            let polka = Polka.manager_alloc_loose () in
+            let inter =
+              rewrite srk ~down:(nnf_rewriter srk) inter
+            in
+
+            let conv = 
+              SrkApron.formula_of_property 
+                (Abstract.abstract 
+                   srk 
+                   ~exists:(fun s -> Symbol.Set.mem s (symbols inter) && not (Symbol.Set.mem s skolems))
+                   polka 
+                   inter) 
+            in
+            let inter = conv in
+
+            let intermediate_tr = 
+              T.make
+                ~exists
+                inter
+                trs
+            in
+
+            let phased_tr = T.mul srk (T.mul srk phase1 intermediate_tr) phase2 in
+            let phased_tr = mk_exists_consts srk (T.exists phased_tr) (T.formula phased_tr) in
+
+            Syntax.to_file srk (phased_tr) "/Users/jakesilverman/Documents/arraysmttests/PHASED.smt2";
+            (* Adds constraints on loop counter depending on which phase(s) taken*)
+            let both_phases = 
+              mk_and 
+                srk
+                [mk_eq 
+                   srk 
+                   lc 
+                   (mk_add srk [mk_const srk exp2term;
+                                mk_const srk exp1term;
+                                mk_int srk 1]);
+                 phased_tr;
+                 mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
+                 mk_leq srk (mk_zero srk) (mk_const srk exp2term);
+                ]
+            in
+            let both_phases = mk_exists_const srk exp1term both_phases in
+            let both_phases = mk_exists_const srk exp2term both_phases in
+            
+            let both_phases = 
+              Quantifier.eq_guided_qe 
+                srk
+                (Quantifier.miniscope srk both_phases)
+            in
+
+            Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/BOTH_prembp.smt2";
+
+
+            (* TODO: make sure quants introduced *)
+            let both_phases = Quantifier.mbp_qe_inplace srk both_phases in
+
+
+            Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/BOTH.smt2";
+
+
+            let phase1_only = 
+                  mk_and 
+                    srk
+                    [mk_eq srk lc (mk_const srk exp1term);
+                     (T.formula phase1);
+                     mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
+                    ]
+            in
+            let phase1_only = mk_exists_consts srk (T.exists phase1) phase1_only in
+            let phase1_only = mk_exists_const srk exp1term phase1_only in
+            
+            let phase1_only = 
+              Quantifier.eq_guided_qe 
+                srk
+                (Quantifier.miniscope srk phase1_only)
+            in
+
+            Syntax.to_file srk phase1_only "/Users/jakesilverman/Documents/arraysmttests/PH1_pre.smt2";
+
+
+            (* TODO: make sure quants introduced *)
+            let phase1_only = Quantifier.mbp_qe_inplace srk phase1_only in
+
+
+            Syntax.to_file srk phase1_only "/Users/jakesilverman/Documents/arraysmttests/PH1.smt2";
+
+
+
+            let phase2_only = 
+                  mk_and 
+                    srk
+                    [mk_eq srk lc (mk_const srk exp2term);
+                     (T.formula phase2);
+                     mk_leq srk (mk_zero srk) (mk_const srk exp2term);
+                    ]
+            in
+            let phase2_only = mk_exists_consts srk (T.exists phase2) phase2_only in
+            let phase2_only = mk_exists_const srk exp2term phase2_only in
+
+            let phase2_only = 
+              Quantifier.eq_guided_qe 
+                srk
+                (Quantifier.miniscope srk phase2_only)
+            in
+
+            Syntax.to_file srk phase2_only "/Users/jakesilverman/Documents/arraysmttests/PH2_pre.smt2";
+
+
+            (* TODO: make sure quants introduced *)
+            let phase2_only = Quantifier.mbp_qe_inplace srk phase2_only in
+
+
+            Syntax.to_file srk phase2_only "/Users/jakesilverman/Documents/arraysmttests/PH2.smt2";
+
+            mk_or srk [both_phases; phase1_only; phase2_only]
+
+          | Dec _ -> (mk_true srk) (* turned off for now to make testing smoother *)
+        )
+        directs, exp1term, exp2term
+
+
 
     let exp srk _ lc obj =
       let t1 = time "EXP IN" in
-
+(*
       let arr_vars_eq = 
         mk_and
           srk
@@ -1873,12 +2094,33 @@ module OldPmfa = struct
 
 
 
-      let exp_res_pre = 
+      let _ = 
         mk_or 
           srk 
           [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
             nstar;
            nstarwnstar] 
+      in
+*)
+
+
+
+     let noop_eqs = 
+        List.map 
+          (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
+          obj.iter_trs
+      in
+
+
+      let directs = directional_vars srk obj.ground_lia obj.iter_trs in
+      let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc obj.skolems in
+      (* Redo this part to act on tfs rather than first converting to formula *)
+      let direct_res = mk_and srk directs_res in
+      let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
+      let exp_res_pre = 
+        mk_or 
+          srk 
+          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs); direct_res] 
       in
       (*
        * In exp_res_pre, create equivalence classes of the array
@@ -1908,9 +2150,9 @@ module OldPmfa = struct
           []
       in
 
-      let all_but_map = time "abp" in
+      (*let all_but_map = time "abp" in
 
-      diff nstarreal all_but_map "all but map";
+      diff nstarreal all_but_map "all but map";*)
 
 
 
