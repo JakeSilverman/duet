@@ -78,6 +78,10 @@ val local_project_cube : 'a context ->
  * may want to convert to dnf prior to calling.*)
 val miniscope : 'a context -> 'a formula -> 'a formula
 
+val miniscope2 : 'a context -> 'a formula -> 'a formula
+
+
+
 (** Uses equality terms to eliminate quantifiers. Works ground up
  * eliminating quantifiers when possible with no backtracing.
  * Multiple consecutive runs of this function may yield new eliminations. *)
@@ -90,6 +94,8 @@ val eq_guided_qe_new : 'a context -> 'a formula -> 'a formula
 val dumb_factor : 'a context -> 'a formula -> 'a formula
 
 val eq_guided_elim_loop : 'a context -> 'a formula -> 'a formula
+
+val eq_guided_elim_mini_loop : 'a context -> 'a formula -> 'a formula
 
 
 

@@ -2351,7 +2351,7 @@ let quant_free srk phi =
 
 
 
-let miniscope srk phi : 'a formula =
+let miniscope2 srk phi : 'a formula =
   (* The miniscoping procedure works in two phases:
    * the first phase pushes quantifier nodes of the input formula tree deeper
    * into the tree (sometimes removing the quantifier altogether) 
@@ -2436,22 +2436,22 @@ let miniscope srk phi : 'a formula =
             BatHashtbl.length (free_vars junct) = 1 && quant_free srk junct)
           l1
       in
-      Log.errorf "l1 solo is %n and others is %n" (List.length l1_solo) (List.length l1_others);
-      List.iter (fun j -> Log.errorf "l1 solo is %a" (Formula.pp srk) j) l1_solo;
-      List.iter (fun j -> Log.errorf "l2 others is %a\n\n\n" (Formula.pp srk) j) l1_others;
 
 
       let c = 
         if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
           mk_junct jtyp (List.map (pushdown qtyp name typ tag_along_clause) l1))
         else if List.length l1_others <= 1 then (
-          Log.errorf "TAG ALONG";
           let new_tag_along =
             match tag_along_clause with
             | None -> Some (jtyp, mk_junct jtyp l1_solo)
             | Some (j, c) -> assert (j = jtyp); Some (jtyp, mk_junct jtyp (c :: l1_solo))
           in
-          mk_junct jtyp (List.map (pushdown qtyp name typ new_tag_along) l1_others))
+          if List.length l1_others = 1 then (
+            mk_junct jtyp (List.map (pushdown qtyp name typ new_tag_along) l1_others))
+          else
+            let (_, c) = Option.get new_tag_along in
+            mk_quant qtyp name typ c)
         else
           match tag_along_clause with
           | None -> mk_quant qtyp name typ (mk_junct jtyp l1)
@@ -2484,7 +2484,7 @@ let miniscope srk phi : 'a formula =
       | `Atom _, Some(jtyp, c)  | `Proposition _, Some (jtyp, c) | `Ite _, Some (jtyp, c) -> 
         mk_quant qtyp name typ (mk_junct jtyp [phi; c])
       | `Not phi, None -> mk_not srk (pushdown (flip qtyp) name typ None phi)
-      | `Not phi, Some (jtyp, c) -> 
+      | `Not _, Some (jtyp, c) ->
         mk_not srk (pushdown (flip qtyp) name typ (Some (flipj jtyp, mk_not srk c)) phi)
       | `And juncts, _ -> handle_juncts `And juncts
       | `Or juncts, _ -> handle_juncts `Or juncts
@@ -2518,9 +2518,154 @@ let miniscope srk phi : 'a formula =
 
 
 
+let miniscope srk phi : 'a formula =
+  (* The miniscoping procedure works in two phases:
+   * the first phase pushes quantifier nodes of the input formula tree deeper
+   * into the tree (sometimes removing the quantifier altogether) 
+   * and the second phase takes care of updating the debruijn
+   * indices. The two phases serve to minimize the number of passes
+   * through the input formula. As such, the first phase requires that we attach
+   * to each node of the formula tree enough information to remap the debruijn
+   * variables. We acheive this by adding to each node of the formula tree
+   * (1) a "delta" value, denoting the number of ancestor quantifier nodes that 
+   * are now descendant quantifier nodes
+   * and (2) a "rem" value denoting the number of ancestor quantifiers nodes 
+   * that were removed. We additionally add to each node of the formula tree 
+   * the free vars  in use that way we can avoid having to compute them multiple
+   * times.
+   *
+   * For the "rem" value, we further minimize the number of passes through the 
+   * formula by delaying propogation of information (by this I mean if a 
+   * quantifier is deleted upon seeing ancestor of node n, then we ought to
+   * increment n's rem value by 1 but we delay this).
+   **)
+  let flip qtyp =
+    match qtyp with
+    | `Exists -> `Forall
+    | `Forall -> `Exists
+  in
+  let pass_thru qtyp expr_typ =
+    match qtyp, expr_typ with
+    | `Exists, `Exists -> `Pass
+    | `Exists, `Forall -> `Blocking
+    | `Forall, `Forall -> `Pass
+    | `Forall, `Exists -> `Blocking
+    | `Forall, `And -> `Pass
+    | `Exists, `And -> `Blocking
+    | `Exists, `Or -> `Pass
+    | `Forall, `Or -> `Blocking
+  in
+  let mk_quant qtyp name typ phi =
+    match qtyp with
+    | `Exists -> mk_exists srk ~name typ phi
+    | `Forall -> mk_forall srk ~name typ phi
+  in
+  let mk_junct jtyp juncts =
+    match jtyp with
+    | `Or -> mk_or srk juncts
+    | `And -> mk_and srk juncts
+  in
+  (* This is the logic for pushing the quantifier qnt into formula node.
+   * delta denotes the number of quantifiers that have by passed so far and
+   * tot_rem denotes the total number of quantifiers that were removed in the
+   * formula prior to node.
+   * *)
+  let rec pushdown qtyp name typ phi : 'a formula =
+    let dec_fv_by_1 phi = 
+      substitute
+        srk
+        (fun (ind, typ) -> mk_var srk (ind - 1) typ)
+        phi
+    in
+    let flip_first_2 phi =
+      substitute
+        srk
+        (fun (ind, typ) ->
+           if ind = 0 then mk_var srk 1 typ
+           else if ind = 1 then mk_var srk 0 typ
+           else mk_var srk ind typ)
+        phi
+    in
+    let handle_juncts jtyp juncts =
+      let l1, l2 = 
+        List.partition (fun conj ->
+            BatHashtbl.mem (free_vars conj) 0)
+          juncts
+      in
+      if List.length l2 > 0 && List.length l2 <= 0
+      then (
+        assert (1 = 2);
+        mk_quant qtyp name typ (mk_junct jtyp juncts)
+      )
+      else (
+        let l2' = List.map dec_fv_by_1 l2 in
+        let c = 
+          if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
+            mk_junct jtyp (List.map (pushdown qtyp name typ) l1))
+          else (mk_quant qtyp name typ (mk_junct jtyp l1))
+        in
+        mk_junct jtyp (c :: l2'))
+    in
+    if not (BatHashtbl.mem (free_vars phi) 0)
+    then dec_fv_by_1 phi
+    else (
+      (* vars' is used in the case that the quantifier is pushed down. We both
+       * remove the free variable associated with this quantifier from vars and
+       * we decrement the index of all remaining free vars by 1*)
+      match Formula.destruct srk phi with
+      | `Tru -> assert false
+      | `Fls -> assert false
+      (* TODO: distribute over ITE, or elim ITE. Will do this after ITE elim is
+       * working w/ arrays *)
+      (* Observe that the delta value for
+       * this quantifier node is `-(delta + tot_rem)`. The `-delta` term comes
+       * from the number of quantifier nodes that were previously children that
+       * are now ancestors. The tot_rem factor is necessary to balance the way
+       * we lazily propogate the number of ancestor quantifier nodes that have
+       * been removed.*)
+      | `Atom _  | `Proposition _ | `Ite _ -> mk_quant qtyp name typ phi
+      | `Not phi -> mk_not srk (pushdown (flip qtyp) name typ phi)
+      | `And juncts -> handle_juncts `And juncts
+      | `Or juncts -> handle_juncts `Or juncts
+      | `Quantify((q, n, t, p)) ->
+        if pass_thru qtyp q = `Blocking then
+          mk_quant qtyp name typ phi
+        else (
+          mk_quant 
+            q
+            n
+            t
+            (pushdown qtyp name typ (flip_first_2 p))))
+  in
+  (* Each append to each node in the formula tree 3 pieces of data:
+   * 1) the free vars in the subexpression
+   * 2) the number at quantifiers that have been deleted at this node
+   * 3) the number of quantifiers that were previously ancestors and are now
+   * descendants
+   **)
+  let alg = function
+   | `Quantify (qtyp, name, typ, phi) ->
+      pushdown qtyp name typ phi
+   | open_phi -> Formula.construct srk open_phi
+  in
+  let phi = (Formula.eval srk alg phi) in
+  phi
 
+(*
+let miniscope srk phi =
+  let a = miniscope2 srk phi in
+  let b = miniscope3 srk phi in
+ if a != b then (
 
-
+   Log.errorf "phi is %a" (Formula.pp srk) phi;
+   Log.errorf "a is %a" (Formula.pp srk) a;
+   Log.errorf "b is %a" (Formula.pp srk) b;
+   Syntax.to_file srk a "/Users/jakesilverman/Documents/arraysmttests/MINI1.smt2";
+   Syntax.to_file srk b "/Users/jakesilverman/Documents/arraysmttests/MINI2.smt2";
+   assert (1 = 2); a)
+ else
+  a
+*)
 
 (* Given a list of equalities, find a candidate
  * term to substitute in for var 0 *)
@@ -3102,6 +3247,19 @@ let eq_guided_elim_loop srk phi =
     if changed then helper phi (count + 1) else phi
   in
   helper phi 0
+
+let eq_guided_elim_mini_loop srk phi =
+  let rec helper phi count =
+    assert (count <= 10);
+    let phi = miniscope srk phi in
+    let phi = miniscope srk phi in
+
+    let phi, changed = eq_guided_qe_helper srk phi in
+    if changed then helper phi (count + 1) else phi
+  in
+  helper phi 0
+
+
 
 let mbp_qe_inplace_old srk phi =
   let count = ref 0 in
