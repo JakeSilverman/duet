@@ -1712,7 +1712,6 @@ module OldPmfa = struct
                    polka 
                    phase2) 
             in
-            Log.errorf "Phase 2 non conv is %a" (Formula.pp srk) phase2;
             let phase2_single = conv in
             Log.errorf "PHASE 2 is %a" (Formula.pp srk) phase2_single;
             let phase2_single_tr = T.make ~exists phase2_single trs in
@@ -1765,7 +1764,8 @@ module OldPmfa = struct
                    inter) 
             in
             let inter = conv in
-
+            Log.errorf "INTER is %a" (Formula.pp srk) inter;
+            
             let intermediate_tr = 
               T.make
                 ~exists
@@ -1773,27 +1773,37 @@ module OldPmfa = struct
                 trs
             in
 
-            let phased_tr = T.mul srk (T.mul srk phase1 intermediate_tr) phase2 in
-            let phased_tr = mk_exists_consts srk (T.exists phased_tr) (T.formula phased_tr) in
+            let phased_tf = T.mul srk phase1 (T.mul srk intermediate_tr phase2) in
+            let phased_tr =
+              substitute_const
+                srk
+                (fun s -> if s = exp2term then
+                    mk_sub 
+                      srk
+                      lc
+                      (mk_add
+                        srk
+                        [mk_const srk exp1term; mk_one srk])
+                  else mk_const srk s)
+                (T.formula phased_tf)
+            in
+            let phased_tr = mk_exists_consts srk (T.exists phased_tf) phased_tr in
 
-            Syntax.to_file srk (phased_tr) "/Users/jakesilverman/Documents/arraysmttests/PHASED.smt2";
             (* Adds constraints on loop counter depending on which phase(s) taken*)
             let both_phases = 
               mk_and 
                 srk
-                [mk_eq 
-                   srk 
-                   lc 
-                   (mk_add srk [mk_const srk exp2term;
-                                mk_const srk exp1term;
-                                mk_int srk 1]);
-                 phased_tr;
+                [phased_tr;
                  mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
-                 mk_leq srk (mk_zero srk) (mk_const srk exp2term);
-                ]
+                 mk_leq srk (mk_zero srk) 
+                   (mk_sub 
+                      srk
+                      lc
+                      (mk_add
+                         srk
+                         [mk_const srk exp1term; mk_one srk]))]
             in
             let both_phases = mk_exists_const srk exp1term both_phases in
-            let both_phases = mk_exists_const srk exp2term both_phases in
             
             let both_phases = 
               Quantifier.eq_guided_qe 
@@ -1801,26 +1811,46 @@ module OldPmfa = struct
                 (Quantifier.miniscope srk both_phases)
             in
 
-            Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/BOTH_prembp.smt2";
+            
+            Syntax.to_file srk both_phases "/users/jakesilverman/documents/arraysmttests/both_prembp.smt2";
 
+            Log.errorf "BOTH PHASE MBP";
 
             (* TODO: make sure quants introduced *)
             let both_phases = Quantifier.mbp_qe_inplace srk both_phases in
 
 
+
+let polka = Polka.manager_alloc_loose () in
+            let both_phases =
+              rewrite srk ~down:(nnf_rewriter srk) both_phases
+            in
+
+            let conv = 
+              SrkApron.formula_of_property 
+                (Abstract.abstract 
+                   srk 
+                   ~exists:(fun s -> Symbol.Set.mem s (symbols both_phases))
+                   polka 
+                   both_phases) 
+            in
+            let both_phases = conv in
+
+
+
+
+            Log.errorf "Done";
             Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/BOTH.smt2";
 
+            
 
-            let phase1_only = 
-                  mk_and 
-                    srk
-                    [mk_eq srk lc (mk_const srk exp1term);
-                     (T.formula phase1);
-                     mk_leq srk (mk_zero srk) (mk_const srk exp1term); 
-                    ]
+            let phase1_only =
+              substitute_const
+                srk
+                (fun s -> if s = exp1term then lc else mk_const srk s)
+                (T.formula phase1)
             in
             let phase1_only = mk_exists_consts srk (T.exists phase1) phase1_only in
-            let phase1_only = mk_exists_const srk exp1term phase1_only in
             
             let phase1_only = 
               Quantifier.eq_guided_qe 
@@ -1829,26 +1859,22 @@ module OldPmfa = struct
             in
 
             Syntax.to_file srk phase1_only "/Users/jakesilverman/Documents/arraysmttests/PH1_pre.smt2";
-
+            Log.errorf "Forst PHASE MBP";
 
             (* TODO: make sure quants introduced *)
             let phase1_only = Quantifier.mbp_qe_inplace srk phase1_only in
-
+            Log.errorf "Done";
 
             Syntax.to_file srk phase1_only "/Users/jakesilverman/Documents/arraysmttests/PH1.smt2";
 
 
-
-            let phase2_only = 
-                  mk_and 
-                    srk
-                    [mk_eq srk lc (mk_const srk exp2term);
-                     (T.formula phase2);
-                     mk_leq srk (mk_zero srk) (mk_const srk exp2term);
-                    ]
+            let phase2_only =
+              substitute_const
+                srk
+                (fun s -> if s = exp2term then lc else mk_const srk s)
+                (T.formula phase2)
             in
             let phase2_only = mk_exists_consts srk (T.exists phase2) phase2_only in
-            let phase2_only = mk_exists_const srk exp2term phase2_only in
 
             let phase2_only = 
               Quantifier.eq_guided_qe 
@@ -1857,14 +1883,13 @@ module OldPmfa = struct
             in
 
             Syntax.to_file srk phase2_only "/Users/jakesilverman/Documents/arraysmttests/PH2_pre.smt2";
-
+            Log.errorf "SECOND PHASE MBP";
 
             (* TODO: make sure quants introduced *)
             let phase2_only = Quantifier.mbp_qe_inplace srk phase2_only in
 
-
+            Log.errorf "DONE";
             Syntax.to_file srk phase2_only "/Users/jakesilverman/Documents/arraysmttests/PH2.smt2";
-
             mk_or srk [both_phases; phase1_only; phase2_only]
 
           | Dec _ -> (mk_true srk) (* turned off for now to make testing smoother *)
@@ -2116,7 +2141,11 @@ module OldPmfa = struct
       let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc obj.skolems in
       (* Redo this part to act on tfs rather than first converting to formula *)
       let direct_res = mk_and srk directs_res in
+      Syntax.to_file srk direct_res "/Users/jakesilverman/Documents/arraysmttests/DIR_RES_pre.smt2";
+
       let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
+      Syntax.to_file srk direct_res "/Users/jakesilverman/Documents/arraysmttests/DIR_RES_post.smt2";
+
       let exp_res_pre = 
         mk_or 
           srk 
