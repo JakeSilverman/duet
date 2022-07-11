@@ -2339,6 +2339,18 @@ module IncMap = struct
   (*let of_enum e = BatMap.of_enum e, 0*)
 end
 
+
+let quant_free srk phi =
+  let quant = ref true in
+  let alg = function
+    | `Quantify _ -> quant := false;
+    | _ -> ()
+  in
+  Formula.eval srk alg phi;
+  !quant
+
+
+
 let miniscope srk phi : 'a formula =
   (* The miniscoping procedure works in two phases:
    * the first phase pushes quantifier nodes of the input formula tree deeper
@@ -2364,6 +2376,11 @@ let miniscope srk phi : 'a formula =
     match qtyp with
     | `Exists -> `Forall
     | `Forall -> `Exists
+  in
+  let flipj j =
+    match j with
+    | `Or -> `And
+    | `And -> `Or
   in
   let pass_thru qtyp expr_typ =
     match qtyp, expr_typ with
@@ -2391,7 +2408,7 @@ let miniscope srk phi : 'a formula =
    * tot_rem denotes the total number of quantifiers that were removed in the
    * formula prior to node.
    * *)
-  let rec pushdown qtyp name typ phi : 'a formula =
+  let rec pushdown qtyp name typ tag_along_clause phi : 'a formula =
     let dec_fv_by_1 phi = 
       substitute
         srk
@@ -2413,29 +2430,48 @@ let miniscope srk phi : 'a formula =
             BatHashtbl.mem (free_vars conj) 0)
           juncts
       in
-      if List.length l2 > 0 && List.length l2 <= 0
-      then (
-        assert (1 = 2);
-        mk_quant qtyp name typ (mk_junct jtyp juncts)
-      )
-      else (
-        let l2' = List.map dec_fv_by_1 l2 in
-        let c = 
-          if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
-            mk_junct jtyp (List.map (pushdown qtyp name typ) l1))
-          else (mk_quant qtyp name typ (mk_junct jtyp l1))
-        in
-        mk_junct jtyp (c :: l2'))
+      let l2' = List.map dec_fv_by_1 l2 in
+      let l1_solo, l1_others =
+        List.partition (fun junct ->
+            BatHashtbl.length (free_vars junct) = 1 && quant_free srk junct)
+          l1
+      in
+      Log.errorf "l1 solo is %n and others is %n" (List.length l1_solo) (List.length l1_others);
+      List.iter (fun j -> Log.errorf "l1 solo is %a" (Formula.pp srk) j) l1_solo;
+      List.iter (fun j -> Log.errorf "l2 others is %a\n\n\n" (Formula.pp srk) j) l1_others;
+
+
+      let c = 
+        if pass_thru qtyp jtyp = `Pass || List.length l1 <= 1 then (
+          mk_junct jtyp (List.map (pushdown qtyp name typ tag_along_clause) l1))
+        else if List.length l1_others <= 1 then (
+          Log.errorf "TAG ALONG";
+          let new_tag_along =
+            match tag_along_clause with
+            | None -> Some (jtyp, mk_junct jtyp l1_solo)
+            | Some (j, c) -> assert (j = jtyp); Some (jtyp, mk_junct jtyp (c :: l1_solo))
+          in
+          mk_junct jtyp (List.map (pushdown qtyp name typ new_tag_along) l1_others))
+        else
+          match tag_along_clause with
+          | None -> mk_quant qtyp name typ (mk_junct jtyp l1)
+          | Some (j, c) -> mk_quant qtyp name typ (mk_junct j [c; (mk_junct jtyp l1)])
+      in
+      mk_junct jtyp (c :: l2')
     in
     if not (BatHashtbl.mem (free_vars phi) 0)
-    then dec_fv_by_1 phi
+    then 
+      begin match tag_along_clause with
+        | None -> dec_fv_by_1 phi
+        | Some (jtyp, c) -> mk_junct jtyp [dec_fv_by_1 phi; mk_quant qtyp name typ c]
+      end
     else (
       (* vars' is used in the case that the quantifier is pushed down. We both
        * remove the free variable associated with this quantifier from vars and
        * we decrement the index of all remaining free vars by 1*)
-      match Formula.destruct srk phi with
-      | `Tru -> assert false
-      | `Fls -> assert false
+      match Formula.destruct srk phi, tag_along_clause with
+      | `Tru, _ -> assert false
+      | `Fls, _ -> assert false
       (* TODO: distribute over ITE, or elim ITE. Will do this after ITE elim is
        * working w/ arrays *)
       (* Observe that the delta value for
@@ -2444,19 +2480,26 @@ let miniscope srk phi : 'a formula =
        * are now ancestors. The tot_rem factor is necessary to balance the way
        * we lazily propogate the number of ancestor quantifier nodes that have
        * been removed.*)
-      | `Atom _  | `Proposition _ | `Ite _ -> mk_quant qtyp name typ phi
-      | `Not phi -> mk_not srk (pushdown (flip qtyp) name typ phi)
-      | `And juncts -> handle_juncts `And juncts
-      | `Or juncts -> handle_juncts `Or juncts
-      | `Quantify((q, n, t, p)) ->
+      | `Atom _, None  | `Proposition _, None | `Ite _, None -> mk_quant qtyp name typ phi
+      | `Atom _, Some(jtyp, c)  | `Proposition _, Some (jtyp, c) | `Ite _, Some (jtyp, c) -> 
+        mk_quant qtyp name typ (mk_junct jtyp [phi; c])
+      | `Not phi, None -> mk_not srk (pushdown (flip qtyp) name typ None phi)
+      | `Not phi, Some (jtyp, c) -> 
+        mk_not srk (pushdown (flip qtyp) name typ (Some (flipj jtyp, mk_not srk c)) phi)
+      | `And juncts, _ -> handle_juncts `And juncts
+      | `Or juncts, _ -> handle_juncts `Or juncts
+      | `Quantify((q, n, t, p)), _ ->
         if pass_thru qtyp q = `Blocking then
-          mk_quant qtyp name typ phi
+          begin match tag_along_clause with
+          | None -> mk_quant qtyp name typ phi
+          | Some (jtyp, c) -> mk_quant qtyp name typ (mk_junct jtyp [phi; c])
+          end
         else (
           mk_quant 
             q
             n
             t
-            (pushdown qtyp name typ (flip_first_2 p))))
+            (pushdown qtyp name typ tag_along_clause (flip_first_2 p))))
   in
   (* Each append to each node in the formula tree 3 pieces of data:
    * 1) the free vars in the subexpression
@@ -2466,7 +2509,7 @@ let miniscope srk phi : 'a formula =
    **)
   let alg = function
    | `Quantify (qtyp, name, typ, phi) ->
-      pushdown qtyp name typ phi
+      pushdown qtyp name typ None phi
    | open_phi -> Formula.construct srk open_phi
   in
   let phi = (Formula.eval srk alg phi) in
@@ -2697,16 +2740,120 @@ let get_subst_cands srk eqs =
           if not (Hashtbl.mem (free_vars t1) ind) 
           then Some (t1)
           else None
-        | _, _ ->  None) eqs
+        | _ ->
+          begin match Term.refine srk t1, Term.refine srk t2 with
+            | `ArithTerm t1, `ArithTerm t2 ->
+              begin try ( 
+              let eq_0 = mk_sub srk t1 t2 in
+              if Hashtbl.mem (free_vars eq_0) 0 then (
+                let typ0 = Hashtbl.find (free_vars eq_0) 0 in
+                let syms_to_fvs = Hashtbl.create 97 in
+                let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+                    let sym = mk_symbol srk (typ :> typ) in
+                    Hashtbl.add syms_to_fvs sym (ind, typ); 
+                    sym)
+                in
+                let eq_0 = 
+                  substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) eq_0
+                in
+                let eq_0_lt = Linear.linterm_of srk eq_0 in
+                let (coeff, vec) = 
+                  Linear.QQVector.pivot 
+                    (Linear.dim_of_sym (fvs_to_syms (0, typ0)))  
+                    eq_0_lt 
+                in
+                if QQ.equal coeff QQ.zero then None else(
+                let equality_lt =
+                  Linear.QQVector.scalar_mul (QQ.negate (QQ.inverse coeff)) vec
+                in
+                let equality = Linear.of_linterm srk equality_lt in
+                let term = 
+                  substitute_const
+                    srk
+                    (fun s -> 
+                       if Hashtbl.mem syms_to_fvs s
+                       then (
+                         let (i, t) = Hashtbl.find syms_to_fvs s in
+                         mk_var srk i t)
+                       else
+                         mk_const srk s)
+                    equality
+                in
+                Some (term :> ('a, typ_term) expr)))
+              else None)
+              with _ -> None
+            end
+            | _ -> None
+          end) eqs
   in
   if List.length candidates = 0 then None
   else Some (List.hd candidates)
 
 
+let normalized_intersection srk lsts =
+  if List.length lsts = 0 then []
+  else
+    let syms_to_fvs = Hashtbl.create 97 in
+    let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+        let sym = mk_symbol srk (typ :> typ) in
+        Hashtbl.add syms_to_fvs sym (ind, typ); 
+        sym)
+    in
+
+    let lsts = 
+      List.map (fun eq_pairs ->
+          List.map (fun (a, b) ->
+              begin match Term.refine srk a, Term.refine srk b with
+                | `ArithTerm t1, `ArithTerm t2 ->
+
+                  begin try ( 
+                    let eq_0 = mk_sub srk t1 t2 in
+                    let eq_0 = 
+                      substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) eq_0
+                    in
+                    let eq_0_lt = Linear.linterm_of srk eq_0 in
+                    let coeff = fst (List.hd (BatList.of_enum (QQVector.enum eq_0_lt))) in
+                    let eq_0_lt = 
+                      Linear.QQVector.scalar_mul (QQ.negate (QQ.inverse coeff)) eq_0_lt
+                    in
+                    let eq_0 = Linear.of_linterm srk eq_0_lt in
+
+                    let term = 
+                      substitute_const
+                        srk
+                        (fun s -> 
+                           if Hashtbl.mem syms_to_fvs s
+                           then (
+                             let (i, t) = Hashtbl.find syms_to_fvs s in
+                             mk_var srk i t)
+                           else
+                             mk_const srk s)
+                        eq_0
+                    in
+                    (mk_zero srk :> ('a, typ_term) expr), (term :> ('a, typ_term) expr))
+                    with _ -> (a, b)
+                  end
+                | _ -> a, b
+              end)
+            eq_pairs)
+        lsts
+    in
+    let sets = List.map BatSet.PSet.of_list lsts in
+    let inter = 
+      List.fold_left (fun acc set ->
+          BatSet.PSet.intersect acc set)
+        (List.hd sets)
+        sets
+    in
+    BatSet.PSet.to_list inter
+
+
+
+
 let eq_guided_qe_helper srk phi =
   let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
-  let intersect _ = [] in
+  let intersect lsts = normalized_intersection srk lsts in
   let union lsts = List.flatten lsts in
 
   let subst phi cand_term =
@@ -2719,6 +2866,7 @@ let eq_guided_qe_helper srk phi =
   let find_subst typ eqs diseqs fv_tru fv_fls  =
     let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
     let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
+    (* This is incorrect for forall bools *)
     let replacement =
       match typ with
       | `TyBool ->
