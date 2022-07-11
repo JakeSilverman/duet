@@ -1154,7 +1154,8 @@ let _ =
      Arg.Clear precondition,
      " Synthesize mortal preconditions")
 
-let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(Product(GuardedTranslation)(PolyhedronGuard)) (Product(Vas.Monotone)(PolyhedronGuard))): PreDomain)
 
 
 (*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
@@ -1169,6 +1170,19 @@ i*)
     (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
 
 let array_analyze file =
+
+(*
+  let phi = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/arraysmttests/withEQ.smt2" in
+  Log.errorf "STARTED";
+  let phi = 
+    Quantifier.miniscope 
+      srk
+      phi
+  in
+  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/NEWEQ.smt2";
+  assert (1 = 2);
+*)
+
   (*let init = time "init" in*)
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
   let fp = Pmfa.elim_ite_chc srk fp in
@@ -1209,14 +1223,20 @@ let array_analyze file =
 
   let phi = Pmfa.eliminate_stores srk phi in
   let phi = Syntax.eliminate_ite srk phi in
- 
-  let trs = [] in
-  let tf = TransitionFormula.make phi trs in
+
   (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
-  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf) in
+  let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
+  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/VCCONDPRECONVERT.smt2";
+
+
+
+  let lia = Syntax.Formula.prenex srk lia in
+  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/VCCONDFINAL.smt2";
+
+
   (*let lia = Quantifier.eq_guided_qe srk lia in*)
     Log.errorf "MADE IT TO FINAL QUERY";
-  match Quantifier.simsat srk lia with
+  match CQuantifier.CoarseGrainStrategyImprovement.simsat srk lia with
   | `Unsat  -> 
     logf ~level:`always "Safe"
 
