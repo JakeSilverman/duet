@@ -1501,7 +1501,7 @@ module OldPmfa = struct
 
 
       let phi = 
-        Quantifier.eq_guided_qe 
+        Quantifier.eq_guided_elim_mini_loop 
           srk
           (T.formula tf)
       in
@@ -1602,7 +1602,9 @@ module OldPmfa = struct
     in
 
     let lia, skolems = skolemize_eh_alt srk lia in 
-
+    let lia = Quantifier.miniscope srk lia in
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia_pre_mbp.smt2";
+ 
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
   
     Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
@@ -2129,6 +2131,13 @@ let polka = Polka.manager_alloc_loose () in
 *)
 
 
+     (* let arr_vars_eq = 
+        mk_and
+          srk
+          (List.map (fun (z, z') -> mk_eq srk (mk_const srk z) (mk_const srk z')) obj.arr_only_trs)
+      in*)
+
+
 
      let noop_eqs = 
         List.map 
@@ -2136,6 +2145,24 @@ let polka = Polka.manager_alloc_loose () in
           obj.iter_trs
       in
 
+      (*let exists s = not (Symbol.Set.mem s obj.skolems) in
+ 
+      let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
+      let noop = T.make ~exists noop obj.iter_trs in
+ 
+      let nstar =
+        Iter2.exp
+           srk 
+           obj.iter_trs 
+           lc
+           (Iter2.abstract
+              srk 
+              noop)
+      in
+
+
+      let nstar = Quantifier.mbp_qe_inplace srk nstar in
+*)
 
       let directs = directional_vars srk obj.ground_lia obj.iter_trs in
       let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc obj.skolems in
@@ -2145,6 +2172,7 @@ let polka = Polka.manager_alloc_loose () in
 
       let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
       Syntax.to_file srk direct_res "/Users/jakesilverman/Documents/arraysmttests/DIR_RES_post.smt2";
+
 
       let exp_res_pre = 
         mk_or 
