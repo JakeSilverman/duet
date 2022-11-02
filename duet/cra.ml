@@ -1155,7 +1155,7 @@ let _ =
      " Synthesize mortal preconditions")
 
 let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
-      (Product(Product(GuardedTranslation)(PolyhedronGuard)) (Product(Vas.Monotone)(PolyhedronGuard))): PreDomain)
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
 
 
 (*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
