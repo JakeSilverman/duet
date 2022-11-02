@@ -45,6 +45,9 @@ module OldPmfa : sig
   module T = TransitionFormula
   val pmfa_to_lia : 'a context -> 'a formula -> 'a formula * Symbol.Set.t
 
+  val unskolemize_int_arr : 'a context -> 'a formula -> 'a formula
+
+
 
   val unbooleanize : 'a context -> 'a formula -> 'a formula
 
