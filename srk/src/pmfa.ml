@@ -725,6 +725,7 @@ let apply_offset_candidate srk constr offsets =
         srk 
         a 
         (mk_floor srk (mk_div srk (mk_sub srk term (mk_var srk offset `TyInt)) (mk_int srk 4)))
+        (*(mk_sub srk term (mk_var srk offset `TyInt))*)
     | `Ite _ -> assert false
     | open_term -> ArithTerm.construct srk open_term
   and apply_offset_arr = function
@@ -738,6 +739,7 @@ let apply_offset_candidate srk constr offsets =
       (* Look into getting rid of div by char size *)
       let i_offset = 
         mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk unwrapped_offset `TyInt)) (mk_int srk 4))
+        (*(mk_sub srk i (mk_var srk unwrapped_offset `TyInt))*)
       in
       let v = ArithTerm.eval srk apply_offset_arith v in
       mk_store srk a i_offset v, offset
@@ -1360,7 +1362,8 @@ module OldPmfa = struct
 
 
   (* TODO: equivs *)
-  let unsymbolize_quantifiers srk phi inv_syms =
+  let unsymbolize_quantifiers srk phi inv_syms _renamed univ_names =
+    (*TODO : Error, renamed only goes one level deep *)
     let get_og_name name = 
       String.sub name (String.index name '_') ((String.length name) - (String.index name '_'))
     in
@@ -1372,6 +1375,13 @@ module OldPmfa = struct
           | "S" -> mk_const srk (Hashtbl.find inv_syms sym)
           | "F"
           | "N" ->
+            Log.errorf "Looking for %s" name;
+            (*let name = 
+              if BatHashtbl.mem renamed name then
+                BatHashtbl.find renamed name
+              else name
+            in*)
+            let name = BatUref.uget (univ_names name) in
             let order, typ = BatMap.String.find name map in
             mk_var srk (counter - order - 1) typ
           | _ -> mk_const srk sym
@@ -1462,12 +1472,14 @@ module OldPmfa = struct
       Some univ, eqpf, mk_and srk (phi :: func_consist)
    in
    let renamed_univ = Hashtbl.create 97 in
+   let univ_names = Memo.memo (fun name -> BatUref.uref name) in
    let merge_two (univ1, eqpf1, phi1) (univ2, eqpf2, phi2) =
      match univ1, univ2 with
      | None, None -> None, eqpf1 @ eqpf2, mk_and srk [phi1; phi2]
      | Some n, None
      | None, Some n -> Some n, eqpf1 @ eqpf2, mk_and srk [phi1; phi2]
      | Some name1, Some name2 ->
+       BatUref.unite (univ_names name1) (univ_names name2);
        Hashtbl.add renamed_univ name2 name1;
        Some name1, eqpf1 @ eqpf2, mk_and srk [phi1; phi2]
    in
@@ -1536,7 +1548,9 @@ module OldPmfa = struct
         (fun disj -> quantify disj)
         (Formula.eval srk alg phi'))
    in
-   unsymbolize_quantifiers srk (phi' :> ('a, typ_fo) expr) inv_syms
+   let res = unsymbolize_quantifiers srk (phi' :> ('a, typ_fo) expr) inv_syms renamed_univ univ_names in
+   Log.errorf "res is %a" (Formula.pp srk) res;
+   res
 
 
 
@@ -1823,12 +1837,18 @@ module OldPmfa = struct
 
 
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
-    Log.errorf "OG is %a\n" (Formula.pp srk) (T.formula tf_proj);
-    (*let lia2 = unskolemize_int_arr srk (T.formula tf_proj) in
+   (* Log.errorf "OG is %a\n" (Formula.pp srk) (T.formula tf_proj);
+    let lia2 = unskolemize_int_arr srk (T.formula tf_proj) in
     Log.errorf "unskolem is %a" (Formula.pp srk) lia2;
     Log.errorf "lia is %a" (Formula.pp srk) lia;
     Syntax.to_file srk lia2 "/Users/jakesilverman/Documents/arraysmttests/unanything.smt2";
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/unanything_OG.smt2";
+    Syntax.to_file srk (T.formula tf_proj) "/Users/jakesilverman/Documents/arraysmttests/REAL_OG.smt2"; 
+
 *)
+
+    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia.smt2";
+
 
     let lia = 
       Quantifier.eq_guided_qe 
@@ -1840,7 +1860,23 @@ module OldPmfa = struct
     let lia = Quantifier.miniscope srk lia in
  
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
-(*  let lia2 = 
+    Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/g_lia.smt2";
+
+
+
+  (*  let testing = Quantifier.miniscope srk lia2 in
+    Syntax.to_file srk testing "/Users/jakesilverman/Documents/arraysmttests/testing.smt2";
+
+    let testing2 =
+      Quantifier.eq_guided_qe 
+        srk
+        testing 
+    in
+Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testing2.smt2";
+
+
+
+  let lia2 = 
       Quantifier.eq_guided_qe 
         srk
         (Quantifier.miniscope srk lia2)
@@ -1857,10 +1893,10 @@ module OldPmfa = struct
     Syntax.to_file srk ground_lia2 "/Users/jakesilverman/Documents/arraysmttests/ground_lia2.smt2";
     Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
     assert (1 = 2);
-*)
 
 
-  
+
+  *)
 
 
 
@@ -1903,10 +1939,10 @@ module OldPmfa = struct
       | `Unsat -> true
       | `Unknown -> failwith "at most single unknown"
 *)
-(* 
+ 
     let at_most_single_write _ _ _ _ =
       true
-  *)  
+    
 
 
     type 'a dir_var = Inc of 'a arith_term * 'a arith_term | Dec of 'a arith_term * 'a arith_term
@@ -2003,6 +2039,10 @@ module OldPmfa = struct
             in
 
             let inter = mk_and srk [phi;  mk_leq srk x j; mk_lt srk j x'] in
+
+            Log.errorf "Formula phased is %a" (Formula.pp srk) inter;
+            Syntax.to_file srk inter "/Users/jakesilverman/Documents/arraysmttests/UNIQUE.smt2";
+
             let polka = Polka.manager_alloc_loose () in
             let inter =
               rewrite srk ~down:(nnf_rewriter srk) inter
@@ -2064,6 +2104,8 @@ module OldPmfa = struct
                 (Quantifier.miniscope srk both_phases)
             in
 
+            Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/both_phases.smt2";
+Unix.sleep 5;
             (* TODO: make sure quants introduced *)
             let both_phases = Quantifier.mbp_qe_inplace srk both_phases in
 
@@ -2134,7 +2176,7 @@ let polka = Polka.manager_alloc_loose () in
 
     let exp srk _ lc obj =
       let t1 = time "EXP IN" in
-(*
+
       let arr_vars_eq = 
         mk_and
           srk
@@ -2353,14 +2395,14 @@ let polka = Polka.manager_alloc_loose () in
 
 
 
-      let _ = 
+      let old_method = 
         mk_or 
           srk 
           [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
             nstar;
            nstarwnstar] 
       in
-*)
+
 
 
      (* let arr_vars_eq = 
@@ -2401,13 +2443,13 @@ let polka = Polka.manager_alloc_loose () in
       (* Redo this part to act on tfs rather than first converting to formula *)
       let direct_res = mk_and srk directs_res in
 
-      let direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
+      let _direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
 
 
       let exp_res_pre = 
         mk_or 
           srk 
-          [(*mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);*) direct_res] 
+          [(*mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);*) old_method] 
       in
       (*
        * In exp_res_pre, create equivalence classes of the array

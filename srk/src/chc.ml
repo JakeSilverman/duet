@@ -245,7 +245,7 @@ module Fp = struct
       in
       let t3 = time "Star Fin" in
       diff t2 t3 "Rest of star";
-      if t3 -. t1 > 100.0 then assert false else ();
+      if t3 -. t1 > 100.1 then assert false else ();
       (* TODO: try to remove the new quants via miniscoping/del procedure *)
       Edge (p_c, p_h, phi') 
 
