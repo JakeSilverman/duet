@@ -389,7 +389,7 @@ module GuardedTranslation = struct
           (fun s -> if Hashtbl.mem eq_subs s then Hashtbl.find eq_subs s else mk_const srk s)
           (mk_and srk ((TF.formula tf)::sx_eq_y))
       in
-      (*let mbped = phi in
+      let mbped = phi in
       Syntax.to_file srk mbped "/Users/jakesilverman/Documents/arraysmttests/GUARD.smt2";
 
       Log.errorf "mbp printed";
@@ -400,7 +400,7 @@ module GuardedTranslation = struct
         phi
       in
       Syntax.to_file srk mped_post "/Users/jakesilverman/Documents/arraysmttests/guarded_trans.smt2";
-*)
+
       Quantifier.mbp
         srk
         (fun x -> Symbol.Map.mem x sym_to_var)

@@ -1477,14 +1477,18 @@ i*)
 let array_analyze file =
 
 (*
-  let phi = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/arraysmttests/withEQ.smt2" in
+  let phi = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/arraysmttests/test.smt2" in
+  let lia = Pmfa.OldPmfa.unskolemize_int_arr srk phi in
+  let phi = Quantifier.miniscope srk lia in
   Log.errorf "STARTED";
+  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/mini.smt2";
+
   let phi = 
-    Quantifier.miniscope 
+    Quantifier.eq_guided_qe 
       srk
       phi
   in
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/NEWEQ.smt2";
+  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/test_duet.smt2";
   assert (1 = 2);
 *)
 
