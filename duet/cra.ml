@@ -1214,7 +1214,6 @@ let array_analyze file =
   
     let phi = Chc.Fp.query_vc_condition srk fp ad in
     Log.errorf "FOUND VC COND";
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/VCCONDINIT.smt2";
 
   
   let phi = Syntax.eliminate_ite srk phi in
@@ -1230,12 +1229,10 @@ let array_analyze file =
 
   (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
   let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
-  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/VCCONDPRECONVERT.smt2";
 
 
 
   let lia = Syntax.Formula.prenex srk lia in
-  Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/VCCONDFINAL.smt2";
 
 
   (*let lia = Quantifier.eq_guided_qe srk lia in*)

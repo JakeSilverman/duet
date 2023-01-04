@@ -1839,6 +1839,7 @@ let _orient project eqs =
   go eqs []
 
 let mbp ?(dnf=false) srk exists phi =
+  
   let phi =
     eliminate_ite srk phi
     |> rewrite srk
@@ -2647,21 +2648,6 @@ let miniscope srk phi : 'a formula =
   let phi = (Formula.eval srk alg phi) in
   phi
 
-(*
-let miniscope srk phi =
-  let a = miniscope2 srk phi in
-  let b = miniscope3 srk phi in
- if a != b then (
-
-   Log.errorf "phi is %a" (Formula.pp srk) phi;
-   Log.errorf "a is %a" (Formula.pp srk) a;
-   Log.errorf "b is %a" (Formula.pp srk) b;
-   Syntax.to_file srk a "/Users/jakesilverman/Documents/arraysmttests/MINI1.smt2";
-   Syntax.to_file srk b "/Users/jakesilverman/Documents/arraysmttests/MINI2.smt2";
-   assert (1 = 2); a)
- else
-  a
-*)
 
 (* Given a list of equalities, find a candidate
  * term to substitute in for var 0 *)

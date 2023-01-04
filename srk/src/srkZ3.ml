@@ -486,7 +486,8 @@ module Solver = struct
           `Sat (Interpretation.wrap ~symbols srk (model_get_value srk z3 m))
         | None -> `Unknown
       end
-    | `Unsat -> `Unsat
+    | `Unsat -> 
+      `Unsat
     | `Unknown -> `Unknown
 
   let get_concrete_model solver symbols =
