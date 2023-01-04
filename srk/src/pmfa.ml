@@ -571,31 +571,16 @@ let determine_offsets srk fp =
             fp
         in
 
-        BatHashtbl.iter (fun rel fvs -> 
-          Log.errorf "Proposed offset for is %a\n" (pp_symbol srk) rel;
-          BatSet.Int.iter (fun fv -> Log.errorf "one is %n\n" fv) fvs)
-          offsetcands;
-
-        BatHashtbl.iter (fun sym fvs ->
-            Log.errorf "offset cands for sym %a include\n" (pp_symbol srk) sym;
-            BatSet.Int.iter (fun fv -> Log.errorf "includes %n\n" fv) fvs;
-            Log.errorf "\n\n")
-          offsetcands;
         let subchc_formula = 
           create_offset_formula srk subchc symb_rel_params offsetcands 
         in
-        List.iter (fun subchc_phi ->
-            Log.errorf "Sub formula is %a\n" (Formula.pp srk) subchc_phi)
-          subchc_formula;
         let offset_formula = mk_and srk subchc_formula in
 
         let solver = Smt.mk_solver srk in
         Smt.Solver.add solver [offset_formula];
         match Smt.Solver.get_model solver with
         | `Unsat 
-        | `Unknown -> 
-          Log.errorf "Offset formula is %a\n" (Formula.pp srk) offset_formula;
-          failwith "Cannot determine offsets"
+        | `Unknown -> failwith "Cannot determine offsets"
         | `Sat m ->
           match Interpretation.select_implicant m offset_formula with
           | None -> assert false
@@ -699,7 +684,6 @@ let remove_skol_consts_chc srk fp =
 
 
 let apply_offset_candidate srk constr offsets =
-  Log.errorf "Constr is %a\n" (Formula.pp srk) constr;
   let rec apply_offset_formula = function
     | `Atom (`Arith (op, s, t)) ->
       let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
@@ -724,8 +708,8 @@ let apply_offset_candidate srk constr offsets =
       mk_select 
         srk 
         a 
-        (mk_floor srk (mk_div srk (mk_sub srk term (mk_var srk offset `TyInt)) (mk_int srk 4)))
-        (*(mk_sub srk term (mk_var srk offset `TyInt))*)
+        (*(mk_floor srk (mk_div srk (mk_sub srk term (mk_var srk offset `TyInt)) (mk_int srk 4)))*)
+        (mk_sub srk term (mk_var srk offset `TyInt))
     | `Ite _ -> assert false
     | open_term -> ArithTerm.construct srk open_term
   and apply_offset_arr = function
@@ -738,8 +722,8 @@ let apply_offset_candidate srk constr offsets =
       let i = ArithTerm.eval srk apply_offset_arith i in
       (* Look into getting rid of div by char size *)
       let i_offset = 
-        mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk unwrapped_offset `TyInt)) (mk_int srk 4))
-        (*(mk_sub srk i (mk_var srk unwrapped_offset `TyInt))*)
+        (*mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk unwrapped_offset `TyInt)) (mk_int srk 4))*)
+        (mk_sub srk i (mk_var srk unwrapped_offset `TyInt))
       in
       let v = ArithTerm.eval srk apply_offset_arith v in
       mk_store srk a i_offset v, offset
@@ -884,7 +868,6 @@ let skolemize_eh_chc srk fp =
 
 
 let pos_bool_elim srk phi syms =
-  Log.errorf "Formula right here is %a\n" (Formula.pp srk) phi;
   let bool_fvs = ref Symbol.Set.empty in
   let syms_to_fvs = Hashtbl.create 97 in
   let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
@@ -948,68 +931,6 @@ let pos_bool_elim srk phi syms =
   phi
 
 
-(*
-let check_quants srk constr =
-  let print = ref false in
-  let alg = function
-    | `Quantify _ -> 
-      print := true
-    | _ -> ()
-  in
-  Formula.eval srk alg constr;
-  if !print then
-    Log.errorf "Constr with quant is %a \n" (Formula.pp srk) constr
-  else ()*)
-
-(*let _ srk phi vars =
-
-  let syms_to_fvs = Hashtbl.create 97 in
-  let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
-      let sym = mk_symbol srk (typ :> typ) in
-      Hashtbl.add syms_to_fvs sym ind; 
-      sym) 
-  in
-  let phi' = 
-    substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) phi
-  in
-  let bools_to_terms = Hashtbl.create 97 in
-  let atoms_to_bools = Memo.memo (fun atom -> 
-      let sym = mk_symbol srk `TyBool in
-      Hashtbl.add bools_to_terms sym (Formula.construct srk (`Atom atom));  
-      sym) 
-  in
-  let _ = 
-    (Symbol.Set.filter (fun sym -> typ_symbol srk sym = `TyBool) vars)
-  in
- 
-
-
-  let boolize = function
-    | `Tru -> mk_true srk
-    | `Fls -> mk_false srk
-    | `Atom (atom) -> mk_const srk (atoms_to_bools atom)
-    | `Not a -> mk_not srk a
-    | `And conjuncts -> mk_and srk conjuncts
-    | `Or disjuncts -> mk_or srk disjuncts
-    | `Proposition (`App (sym, [])) -> mk_const srk sym
-    | `Proposition _ -> assert false
-    | `Ite _ -> assert false
-    | `Quantify _ -> assert false
-  in
-  let boolized_phi = Formula.eval srk boolize phi' in
-  Log.errorf "BEFORE MBP is %a\n" (Formula.pp srk) boolized_phi;
-  (*let phi'' = Quantifier.mbp srk (fun sym -> not (Symbol.Set.mem sym bools)) boolized_phi in*)
-  (*List.iter (fun s -> 
-      Log.errorf "tactic is %s\n" s;
-      Log.errorf "tactic does \n %s\n" (Z3.Tactic.get_tactic_description (Z3.mk_context []) s)
-    
-    ) (Z3.Tactic.get_tactic_names (Z3.mk_context []));
-  let phi'' = SrkZ3.z3_of_formula srk (Z3.mk_context []) phi'' in*)
-  (*Log.errorf "AFTER MBP is %a\n" (Formula.pp srk) phi'';*)
-  boolized_phi
- *)
-
-
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
   let fp' = 
@@ -1035,16 +956,6 @@ let offset_analysis srk fp =
       fp''
   in
 
-
-  (*let _ = 
-    Fp.mapi_rules (fun ind (conc, hypo, constr) ->
-        Log.errorf "BEFORE BETTER BOOL IS %a\n" (Formula.pp srk) constr;
-        let constr' =  better_bool_elim srk constr (Hashtbl.find skolemized_vars ind) in
-        Log.errorf "AFTER BOOL IS %a\n" (Formula.pp srk) constr';
-        conc, hypo, constr')
-      fp''
-  in*)
-
   (* Unskolemize *)
   let fp'3 = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
@@ -1063,17 +974,14 @@ let offset_analysis srk fp =
   let fp'3 = 
     Fp.map_rules (fun (conc, hypo, constr) ->
         let constr'' = Quantifier.miniscope srk constr in
-        Log.errorf "BEFORE EQG here is %a\n" (Formula.pp srk) constr'';
 
         let constr' =
           Quantifier.eq_guided_qe 
             srk
             constr''
         in
-        Log.errorf "Formula AFTER EQG NEW here is %a\n" (Formula.pp srk) constr';
 
         let constr' = Quantifier.eq_guided_elim_loop srk constr' in
-        Log.errorf "Formula AFTER DUMB FACTOR here is %a\n" (Formula.pp srk) constr';
 
  
         conc, hypo, constr')
@@ -1316,6 +1224,7 @@ module OldPmfa = struct
     (*let of_enum e = BatMap.of_enum e, 0*)
   end
 
+  (* Returns an formula in which debruijn indices have been replaced by symbols *)
   let symbolize_quantifiers srk phi =
     let counter = ref 0 in
     let inv_syms = Hashtbl.create 97 in
@@ -1375,7 +1284,6 @@ module OldPmfa = struct
           | "S" -> mk_const srk (Hashtbl.find inv_syms sym)
           | "F"
           | "N" ->
-            Log.errorf "Looking for %s" name;
             (*let name = 
               if BatHashtbl.mem renamed name then
                 BatHashtbl.find renamed name
@@ -1409,7 +1317,7 @@ module OldPmfa = struct
     let get_og_name name = 
       String.sub name (String.index name '_') ((String.length name) - (String.index name '_'))
     in
-    let phi', inv_syms, uvar_of_name = symbolize_quantifiers srk (phi :> ('a, typ_fo) expr) in
+    let phi', inv_syms, _uvar_of_name = symbolize_quantifiers srk (phi :> ('a, typ_fo) expr) in
     let arr_reads = BatHashtbl.create 97 in
     let rec replace_reads term =
       match ArithTerm.destruct srk term with
@@ -1428,37 +1336,32 @@ module OldPmfa = struct
         let a_name =
           begin match ArrTerm.destruct srk a with
             | `App (sym, []) -> show_symbol srk sym
-            | _ -> assert false
-          end
-        in
-        let i_name =
-          begin match ArithTerm.destruct srk i with
-            | `App (sym, []) -> show_symbol srk sym
-            | _ -> assert false
+            | _ -> 
+              assert false
           end
         in
         if BatHashtbl.mem arr_reads a_name then ()
         else BatHashtbl.add arr_reads a_name (Hashtbl.create 97); 
         let a_tbl = BatHashtbl.find arr_reads a_name in
-        if BatHashtbl.mem a_tbl i_name then
-          mk_const srk (snd (BatHashtbl.find a_tbl i_name))
+        if BatHashtbl.mem a_tbl i then
+          mk_const srk (BatHashtbl.find a_tbl i)
         else(
           let name = 
-            "R"^(string_of_int !counter)^(get_og_name a_name)^","^(get_og_name i_name)
+            "R"^(string_of_int !counter)^(get_og_name a_name)^","
           in
           counter := !counter + 1;
           let sym = mk_symbol srk ~name `TyInt in
-          BatHashtbl.add a_tbl i_name (i, sym);
+          BatHashtbl.add a_tbl i sym;
           mk_const srk sym)
     in
-    let elim_arr (univ, eqpf, phi) a_name =
+    let elim_arr _ _ = assert false (*(univ, eqpf, phi) a_name =
       let univ = Option.get univ in
       let reads = Hashtbl.find arr_reads a_name in
-      let i, a_i =
-        match Hashtbl.find_opt reads univ with
-        | Some (i, m) -> (i, m)
+      let i, a_i = assert false in
+        (*match Hashtbl.find_opt reads univ with
+        | Some m -> univ, m
         | None -> Hashtbl.find uvar_of_name univ, (mk_symbol srk ~name:("JAKEA") `TyInt)
-      in
+      in*)
       let func_consist =
         (* TODO: check name not unskolem *)
         (* TODO: add exists *)
@@ -1469,7 +1372,7 @@ module OldPmfa = struct
               (mk_eq srk (mk_const srk a_i) (mk_const srk subst)))
           (BatHashtbl.to_list reads)
       in
-      Some univ, eqpf, mk_and srk (phi :: func_consist)
+      Some univ, eqpf, mk_and srk (phi :: func_consist)*)
    in
    let renamed_univ = Hashtbl.create 97 in
    let univ_names = Memo.memo (fun name -> BatUref.uref name) in
@@ -1502,11 +1405,7 @@ module OldPmfa = struct
    let alg = function
      | `Tru -> [(None, [], mk_true srk)]
      | `Fls -> [(None, [], mk_false srk)]
-     | `And conjuncts -> Log.errorf "sizr was %n" (List.length conjuncts);
-       List.iter (fun disjs -> Log.errorf "size of one is %n" (List.length disjs)) conjuncts;
-       let output = merge_conjs conjuncts in
-       Log.errorf "new size is %n" (List.length output);
-       output
+     | `And conjuncts -> merge_conjs conjuncts
      | `Or disjuncts -> List.concat disjuncts
      | `Not disjuncts ->
        [None, [],
@@ -1549,7 +1448,6 @@ module OldPmfa = struct
         (Formula.eval srk alg phi'))
    in
    let res = unsymbolize_quantifiers srk (phi' :> ('a, typ_fo) expr) inv_syms renamed_univ univ_names in
-   Log.errorf "res is %a" (Formula.pp srk) res;
    res
 
 
@@ -1837,17 +1735,6 @@ module OldPmfa = struct
 
 
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
-   (* Log.errorf "OG is %a\n" (Formula.pp srk) (T.formula tf_proj);
-    let lia2 = unskolemize_int_arr srk (T.formula tf_proj) in
-    Log.errorf "unskolem is %a" (Formula.pp srk) lia2;
-    Log.errorf "lia is %a" (Formula.pp srk) lia;
-    Syntax.to_file srk lia2 "/Users/jakesilverman/Documents/arraysmttests/unanything.smt2";
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/unanything_OG.smt2";
-    Syntax.to_file srk (T.formula tf_proj) "/Users/jakesilverman/Documents/arraysmttests/REAL_OG.smt2"; 
-
-*)
-
-    Syntax.to_file srk lia "/Users/jakesilverman/Documents/arraysmttests/lia.smt2";
 
 
     let lia = 
@@ -1860,43 +1747,8 @@ module OldPmfa = struct
     let lia = Quantifier.miniscope srk lia in
  
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
-    Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/g_lia.smt2";
 
 
-
-  (*  let testing = Quantifier.miniscope srk lia2 in
-    Syntax.to_file srk testing "/Users/jakesilverman/Documents/arraysmttests/testing.smt2";
-
-    let testing2 =
-      Quantifier.eq_guided_qe 
-        srk
-        testing 
-    in
-Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testing2.smt2";
-
-
-
-  let lia2 = 
-      Quantifier.eq_guided_qe 
-        srk
-        (Quantifier.miniscope srk lia2)
-    in
-    Syntax.to_file srk lia2 "/Users/jakesilverman/Documents/arraysmttests/unmini.smt2";
-
-
-    let lia2, _ = skolemize_eh_alt srk lia2 in 
-    let lia2 = Quantifier.miniscope srk lia2 in
-    Syntax.to_file srk lia2 "/Users/jakesilverman/Documents/arraysmttests/unground_lia.smt2";
-
-    let ground_lia2 = Quantifier.mbp_qe_inplace srk lia2 in
-
-    Syntax.to_file srk ground_lia2 "/Users/jakesilverman/Documents/arraysmttests/ground_lia2.smt2";
-    Syntax.to_file srk ground_lia "/Users/jakesilverman/Documents/arraysmttests/ground_lia.smt2";
-    assert (1 = 2);
-
-
-
-  *)
 
 
 
@@ -1948,7 +1800,7 @@ Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testin
     type 'a dir_var = Inc of 'a arith_term * 'a arith_term | Dec of 'a arith_term * 'a arith_term
 
     (* Determines which trs in phi are monotonically increasing/decreasing *)
-    let directional_vars srk phi trs =
+    let _directional_vars srk phi trs =
       List.flatten (
         List.filter_map (fun (x, x') ->
             let xt, xt' = mk_const srk x, mk_const srk x' in
@@ -1960,7 +1812,7 @@ Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testin
             | _ -> None)
           trs)
 
-    let create_phased_exps srk phi trs symb_index directs lc skolems =
+    let _create_phased_exps srk phi trs symb_index directs lc skolems =
       let exp1term = mk_symbol srk ~name:"exp1" `TyInt in
       let exp2term = mk_symbol srk ~name:"exp2" `TyInt in
       List.map (fun direction ->
@@ -2040,8 +1892,6 @@ Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testin
 
             let inter = mk_and srk [phi;  mk_leq srk x j; mk_lt srk j x'] in
 
-            Log.errorf "Formula phased is %a" (Formula.pp srk) inter;
-            Syntax.to_file srk inter "/Users/jakesilverman/Documents/arraysmttests/UNIQUE.smt2";
 
             let polka = Polka.manager_alloc_loose () in
             let inter =
@@ -2057,7 +1907,6 @@ Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testin
                    inter) 
             in
             let inter = conv in
-            Log.errorf "INTER is %a" (Formula.pp srk) inter;
             
             let intermediate_tr = 
               T.make
@@ -2104,8 +1953,6 @@ Syntax.to_file srk testing2 "/Users/jakesilverman/Documents/arraysmttests/testin
                 (Quantifier.miniscope srk both_phases)
             in
 
-            Syntax.to_file srk both_phases "/Users/jakesilverman/Documents/arraysmttests/both_phases.smt2";
-Unix.sleep 5;
             (* TODO: make sure quants introduced *)
             let both_phases = Quantifier.mbp_qe_inplace srk both_phases in
 
@@ -2203,65 +2050,17 @@ let polka = Polka.manager_alloc_loose () in
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
 
-      Log.errorf "NOOP IS %a" (Formula.pp srk) noop;
-      Syntax.to_file srk noop "/Users/jakesilverman/Documents/arraysmttests/noop.smt2";
 
-
-
-      let polka = Polka.manager_alloc_loose () in
       let noop =
         rewrite srk ~down:(nnf_rewriter srk) noop
       in
-      let conv = 
-        SrkApron.formula_of_property 
-          (Abstract.abstract 
-             srk 
-             ~exists:(fun s -> Symbol.Set.mem s (symbols noop) (*&& not (Symbol.Set.mem s obj.skolems)*)) 
-             polka 
-             noop) 
-      in
-      (*let noop = conv in*)
-      Log.errorf "NOOP CONV IS %a" (Formula.pp srk) conv;
-     Syntax.to_file srk conv "/Users/jakesilverman/Documents/arraysmttests/noop_conv.smt2";
-
-      Symbol.Set.iter (fun s -> Log.errorf "Sym is skolem %a" (pp_symbol srk) s) obj.skolems;
+      
 
       let exists s = not (Symbol.Set.mem s obj.skolems) in
       let write = T.make ~exists write obj.iter_trs in
       let noop = T.make ~exists noop obj.iter_trs in
       let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
       let exp2 = mk_symbol srk ~name:"exp2" `TyInt in
-(*
-      let trs_flat = List.flatten (List.map (fun (s, s') -> [s; s']) obj.iter_trs) in
-
-      let consts = 
-        BatList.filter (fun s ->
-
-            Log.errorf "Checking %a" (pp_symbol srk) s;
-            if (Symbol.Set.mem s obj.skolems) || List.mem s trs_flat then false else true)
-          (Symbol.Set.elements (symbols (T.formula noop))) 
-      in
-      let consts_trs, eqs =
-        BatList.split (
-          BatList.map (fun s -> 
-              let s' = mk_symbol srk ~name:(show_symbol srk s) (typ_symbol srk s) in
-              (s, s'), (mk_eq srk (mk_const srk s) (mk_const srk s')))
-            consts)
-      in
-      let fake_trs = (T.symbols noop) @ consts_trs in
-      let fake_noop = mk_and srk ((T.formula noop) :: eqs) in
-      let noop2 = T.make ~exists fake_noop fake_trs in 
-
-
-
-      let vas = Vas.Monotone.abstract srk noop2 in
-      Log.errorf "VAS is MONO %a" (Vas.Monotone.pp srk (T.symbols noop2)) vas;
-
-      let vas_phi = Vas.gamma2 srk vas (T.symbols noop2) in 
-
-      Log.errorf "VAS GAMMA %a" (Formula.pp srk) vas_phi;
-*)
-
 
 
       let prenstar = time "prenstar" in
@@ -2352,7 +2151,6 @@ let polka = Polka.manager_alloc_loose () in
       (* TODO: make sure quants introduced *)
       let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
 
-     Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarnwstarpost.smt2";
 
 
      let nstarmbp = time "nstar" in
@@ -2371,6 +2169,8 @@ let polka = Polka.manager_alloc_loose () in
               noop)
       in
 
+
+
       let nstar2 =
         Iter.exp
           srk 
@@ -2386,7 +2186,6 @@ let polka = Polka.manager_alloc_loose () in
 
 
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstarpost.smt2";
       
       let nstarreal = time "nstarreal" in
 
@@ -2438,13 +2237,13 @@ let polka = Polka.manager_alloc_loose () in
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
 *)
 
-      let directs = directional_vars srk obj.ground_lia obj.iter_trs in
+      (*let directs = directional_vars srk obj.ground_lia obj.iter_trs in
       let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc obj.skolems in
       (* Redo this part to act on tfs rather than first converting to formula *)
       let direct_res = mk_and srk directs_res in
 
       let _direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
-
+*)
 
       let exp_res_pre = 
         mk_or 

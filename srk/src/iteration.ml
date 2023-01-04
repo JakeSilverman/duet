@@ -312,7 +312,7 @@ module GuardedTranslation = struct
     Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
 
 
-  let abstract srk tf =
+  let abstract srk tf = 
     let abs_enter = time "abs" in
     let zz_symbols = (* int-sorted transition symbols *)
       List.filter (fun (s,s') ->
@@ -389,18 +389,7 @@ module GuardedTranslation = struct
           (fun s -> if Hashtbl.mem eq_subs s then Hashtbl.find eq_subs s else mk_const srk s)
           (mk_and srk ((TF.formula tf)::sx_eq_y))
       in
-      let mbped = phi in
-      Syntax.to_file srk mbped "/Users/jakesilverman/Documents/arraysmttests/GUARD.smt2";
-
-      Log.errorf "mbp printed";
-      let mped_post = 
-        Quantifier.mbp
-        srk
-        (fun x -> Symbol.Map.mem x sym_to_var)
-        phi
-      in
-      Syntax.to_file srk mped_post "/Users/jakesilverman/Documents/arraysmttests/guarded_trans.smt2";
-
+      
       Quantifier.mbp
         srk
         (fun x -> Symbol.Map.mem x sym_to_var)
