@@ -308,8 +308,8 @@ module GuardedTranslation = struct
     let t = Unix.gettimeofday () in
     (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-  let diff t1 t2 s = 
-    Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+  let diff _t1 _t2 _s = 
+    (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)()
 
 
   let abstract srk tf = 
