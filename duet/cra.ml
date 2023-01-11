@@ -1208,12 +1208,10 @@ let array_analyze file =
     classes;*)
   let fp = offset_analysis srk fp in
   (*let _ = determine_offsets srk fp in*)
-  Log.errorf "DONE DETERMINING OFFSET CANDS";
 
 
   
     let phi = Chc.Fp.query_vc_condition srk fp ad in
-    Log.errorf "FOUND VC COND";
 
   
   let phi = Syntax.eliminate_ite srk phi in
@@ -1236,7 +1234,7 @@ let array_analyze file =
 
 
   (*let lia = Quantifier.eq_guided_qe srk lia in*)
-    Log.errorf "MADE IT TO FINAL QUERY";
+
   match CQuantifier.CoarseGrainStrategyImprovement.simsat srk lia with
   | `Unsat  -> 
     logf ~level:`always "Safe"

@@ -8,8 +8,8 @@ let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-let diff t1 t2 s = 
-  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+let diff _t1 _t2 _s = 
+  (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)()
 
 let typ_symbol_fo srk sym =
     match typ_symbol srk sym with
@@ -129,7 +129,7 @@ let create_offset_formula srk fp named_rels offsetcands =
       offsetcands
       BatSet.Int.empty
   in
-  let rule_clauses = 
+  let rule_clauses =
     List.map (fun (conc, hypo, constr) -> 
         let chcvar_of_fv = Hashtbl.create 97 in
         let congruent_fvs = 
@@ -312,8 +312,11 @@ let local_partiton_and_cands srk constr int_fvs_set _ =
   let arr_fv_class_and_cands = BatHashtbl.create 99 in
   VarSet.iter (fun var ->
         let arr_class, rwvs, has = BatUref.uget (arr_tbl var) in
-        let unwrapped_class = match arr_class with Fv fv -> fv | Sym _ -> 
+        (*let unwrapped_class = match arr_class with Fv fv -> fv | Sym sym ->
+          Log.errorf "Sym is %a" (pp_symbol srk) sym;
           assert false in
+        Log.errorf "unwrapped class is %n\n\n" unwrapped_class;
+        Log.errorf "Size is %n" (List.length rwvs);*)
         let cands =
           BatList.fold_left (fun cands rw_vars ->
 
@@ -344,7 +347,7 @@ let local_partiton_and_cands srk constr int_fvs_set _ =
             int_fvs_set
             rwvs
         in
-        BatHashtbl.add arr_fv_class_and_cands var (unwrapped_class, cands, has))
+        BatHashtbl.add arr_fv_class_and_cands var (arr_class, cands, has))
     arr_varset;
   arr_fv_class_and_cands
 
@@ -408,6 +411,7 @@ let determine_offsets srk fp =
       | _ -> ())
     (Fp.prop_symbols fp);
 
+  let local_offsets = Hashtbl.create 97 in
   (* Populate partitioning and candidate offsets, one rule at a time *)
   List.iteri (fun rule_num (conc, hypo, constr) ->
       (* Compute a map from constr fvs to chcvars;
@@ -456,24 +460,34 @@ let determine_offsets srk fp =
           let add_rule rules = 
             if has_rw then BatSet.Int.add rule_num rules else rules
           in
-          match arr_var with
-          | Sym sym ->
-            let cell, cands, syms, rules = BatUref.uget (cell_of local_arr_cell) in
-            BatUref.uset (cell_of local_arr_cell) 
-              (cell, intersect cands local_cands, Symbol.Set.add sym syms, add_rule rules)
-          | Fv arr_fv ->
-            let sel (arrs1, cands1, syms1, rules1) (arrs2, cands2, syms2, rules2) =
-              (CVSet.union arrs1 arrs2), 
-              (intersect cands1 cands2),  
-              Symbol.Set.union syms1 syms2,
-              add_rule (BatSet.Int.union rules1 rules2)
-            in
-            BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell);
-            let arr_cell = CVSet.singleton (chcvar_of local_arr_cell) in
-            sel 
-              (BatUref.uget (cell_of arr_fv)) 
-              (arr_cell, local_cands, Symbol.Set.empty, BatSet.Int.empty)
-            |> BatUref.uset (cell_of arr_fv))
+          match local_arr_cell, arr_var with
+            | Sym sym_cell, Sym arr_sym ->
+              BatHashtbl.modify_opt
+                (rule_num, sym_cell)
+                (fun v ->
+                   match v with
+                   | Some (cands, syms) ->
+                   Some (intersect cands local_cands, Symbol.Set.add arr_sym syms)
+                   | None -> Some (local_cands, Symbol.Set.singleton arr_sym))
+                local_offsets
+            | Sym _, Fv _ -> assert false
+            | Fv local_arr_cell_fv, Sym sym ->
+              let cell, cands, syms, rules = BatUref.uget (cell_of local_arr_cell_fv) in
+              BatUref.uset (cell_of local_arr_cell_fv) 
+                (cell, intersect cands local_cands, Symbol.Set.add sym syms, add_rule rules)
+            | Fv local_arr_cell_fv, Fv arr_fv ->
+              let sel (arrs1, cands1, syms1, rules1) (arrs2, cands2, syms2, rules2) =
+                (CVSet.union arrs1 arrs2), 
+                (intersect cands1 cands2),  
+                Symbol.Set.union syms1 syms2,
+                add_rule (BatSet.Int.union rules1 rules2)
+              in
+              BatUref.unite ~sel (cell_of arr_fv) (cell_of local_arr_cell_fv);
+              let arr_cell = CVSet.singleton (chcvar_of local_arr_cell_fv) in
+              sel 
+                (BatUref.uget (cell_of arr_fv)) 
+                (arr_cell, local_cands, Symbol.Set.empty, BatSet.Int.empty)
+              |> BatUref.uset (cell_of arr_fv))
         offset_cands;)
     (Fp.get_rules fp);
   (* Obtain a single copy of each cell / offset proposals *)
@@ -570,17 +584,18 @@ let determine_offsets srk fp =
               (BatSet.Int.mem ind full_painted))
             fp
         in
-
         let subchc_formula = 
           create_offset_formula srk subchc symb_rel_params offsetcands 
         in
+
         let offset_formula = mk_and srk subchc_formula in
 
         let solver = Smt.mk_solver srk in
         Smt.Solver.add solver [offset_formula];
         match Smt.Solver.get_model solver with
         | `Unsat 
-        | `Unknown -> failwith "Cannot determine offsets"
+        | `Unknown -> 
+          failwith "Cannot determine offsets"
         | `Sat m ->
           match Interpretation.select_implicant m offset_formula with
           | None -> assert false
@@ -608,7 +623,60 @@ let determine_offsets srk fp =
             offsets)
       array_cells
   in
-  cell_to_offset, chcvar_to_cell, sym_to_cell
+  BatHashtbl.iter (fun (rule_num, _) (offsetcands, _syms) ->
+      Log.errorf "IN INTERESTING PHASE";
+      let _subchc = 
+        Fp.filteri_rules (fun ind _ -> ind = rule_num) fp
+      in
+      BatHashtbl.iter (fun sym fvs ->
+          Log.errorf "offset cands for sym %a include\n" (pp_symbol srk) sym;
+          BatSet.Int.iter (fun fv -> Log.errorf "includes %n\n" fv) fvs;
+          Log.errorf "\n\n")
+        offsetcands;
+      assert ( 1 = 2);
+      ()
+      (*let subchc_formula = 
+        create_offset_formula srk subchc symb_rel_params offsetcands 
+      in
+
+      List.iter (fun f -> Log.errorf "One formula is %a" (Formula.pp srk) f) subchc_formula;
+      let offset_formula = mk_and srk subchc_formula in
+
+      let solver = Smt.mk_solver srk in
+      Smt.Solver.add solver [offset_formula];
+      match Smt.Solver.get_model solver with
+      | `Unsat 
+      | `Unknown -> 
+        Log.errorf "Offset formula is %a\n" (Formula.pp srk) offset_formula;
+        failwith "Cannot determine offsets"
+      | `Sat m ->
+        match Interpretation.select_implicant m offset_formula with
+        | None -> assert false
+        | Some imp ->
+          let offsets = BatHashtbl.create 97 in
+          List.iter (fun phi -> 
+              begin match Formula.destruct srk phi with
+                | `Atom (`Arith (`Eq, rel, param)) ->
+                  begin match ArithTerm.destruct srk rel, 
+                              ArithTerm.destruct srk param with
+                  | `App (rel, []), `Real param ->
+                    Hashtbl.replace 
+                      offsets
+                      (Hashtbl.find srp_inv rel)
+                      (Option.get (QQ.to_int param))
+                  | _ -> assert false
+                  end
+                | _ -> assert false
+              end) 
+            imp; 
+          CVSet.iter (fun arr -> Hashtbl.add chcvar_to_cell arr cell_num)
+            arrs;
+          Symbol.Set.iter (fun sym -> Hashtbl.add sym_to_cell sym cell_num)
+            syms;
+          offsets)*)
+    )
+    local_offsets;
+cell_to_offset, chcvar_to_cell, sym_to_cell
 
 
 
@@ -713,7 +781,7 @@ let apply_offset_candidate srk constr offsets =
     | `Ite _ -> assert false
     | open_term -> ArithTerm.construct srk open_term
   and apply_offset_arr = function
-    | `App (sym, []) -> 
+    | `App (sym, []) ->
       mk_const srk sym, (Hashtbl.find offsets (Sym sym))
     | `Var (ind, typ) ->
       mk_var srk ind (typ :> typ_fo), (Hashtbl.find offsets (Fv ind))
