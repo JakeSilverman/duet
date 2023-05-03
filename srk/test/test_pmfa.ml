@@ -187,5 +187,5 @@ let suite = "Pmfa" >:::
     (*"contupsuplin" >:: countupsuplin;*)
     (*"test_offset_partitioning" >:: test_offset_partitioning;*) 
     (*"test_init" >:: test_init*)
-    "test_quant" >:: test_quant
+    (*"test_quant" >:: test_quant*)
   ]

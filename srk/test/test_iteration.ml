@@ -493,6 +493,35 @@ let guarded_translation2 () =
   let closure = GT.star srk phi in
   assert_implies closure Infix.(x < (int 0) || (int 0) <= x')
 
+let guarded_translation3 () =
+  let phi =
+    TransitionFormula.make
+      Infix.(x' = x + (int 1))
+      tr_symbols
+  in
+  let abs = Iteration.GuardedTranslation.abstract srk phi in
+  Log.errorf "Abstract is %a \n" (Iteration.GuardedTranslation.pp srk tr_symbols) abs;
+  assert (1 = 2)
+
+let guarded_translation4 () =
+  let phi =
+    TransitionFormula.make
+      Infix.(x' = x + (int 1) && y' = y && (!(z = x) || y = (int 0)) && z' = z)
+      tr_symbols
+  in
+  let abs = Iteration.GuardedTranslation.abstract srk phi in
+  Log.errorf "Abstract is %a \n" (Iteration.GuardedTranslation.pp srk tr_symbols) abs;
+  let closure = GT.star srk phi in
+  assert_implies closure Infix.(!(x <= z && z < x') || (y = (int 0)))
+
+
+
+
+(*((main@%.0.i_0:83 + -100000) < 0
+                         /\ (-main@%.0.i_2:84 + main@%.0.i_0:83 + 1) <= 0
+                         /\ (main@%.0.i_2:84 + -main@%.0.i_0:83 + -1) <= 0
+                         /\ (-j:88 + j':89) <= 0 /\ (j:88 + -j':89) <= 0) *)
+
 let suite = "Iteration" >::: [
     "prepost" >:: prepost;
     "simple_induction" >:: simple_induction;
@@ -520,4 +549,6 @@ let suite = "Iteration" >::: [
     "algebraic2" >:: algebraic2;
     "guarded_translation1" >:: guarded_translation1;
     "guarded_translation2" >:: guarded_translation2;
+    "guarded_translation3" >:: guarded_translation3;
+    "guarded_translation4" >:: guarded_translation4;
   ]
