@@ -46,47 +46,34 @@ module CVSet = BatSet.Make(CHCVar)
 
 (* Determines which integer fvs are equal in constr, only considering those
  * free fvs that appear in fvcands *)
-let determine_eq_int_fvs srk constr fvcands =
-  let syms_to_fvs = Hashtbl.create 97 in
-  let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
-      let sym = mk_symbol srk ~name:"DET EQS" (typ :> typ) in
-      if BatSet.Int.mem ind fvcands 
-      then Hashtbl.add syms_to_fvs sym ind 
-      else ();
-      sym) 
+let determine_eq_int_fvs srk constr fvcands : BatSet.Int.t list =
+  let fv_classes = Memo.memo (fun a -> BatUref.uref (BatSet.Int.singleton a)) in
+  let conjs = match Formula.destruct srk constr with
+   | `And conds -> conds
+   | _ -> assert false
   in
-  let constr' = 
-    substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) constr 
-  in 
-  let cells_syms = 
-    BatHashtbl.fold (fun sym _ cells ->
-        let rec place_in_cell unchecked_cells =
-          match unchecked_cells with
-          | [] -> [Symbol.Set.singleton sym]
-          | hd :: tl ->
-            let rep = Symbol.Set.any hd in
-            let eq = (mk_eq srk (mk_const srk sym) (mk_const srk rep)) in  
-            begin match Smt.entails srk constr' eq with
-                      | `Yes -> (Symbol.Set.add sym hd) :: tl
-                      | `No -> hd :: (place_in_cell tl) 
-                      | `Unknown -> 
-                        failwith "determine_eq_int_fvs failure" 
-            end
-        in
-        place_in_cell cells)
-      syms_to_fvs
+  List.iter (fun cond ->
+      match Formula.destruct srk cond with
+      | `Atom (`Arith (`Eq, i, j)) ->
+        begin match ArithTerm.destruct srk i, ArithTerm.destruct srk j with
+          | `Var (i, _), `Var (j, _) ->
+            if BatSet.Int.mem i fvcands && BatSet.Int.mem j fvcands then
+              BatUref.unite ~sel:BatSet.Int.union (fv_classes i) (fv_classes j)
+            else ()
+          | _ -> ()
+        end
+      | _ -> ())
+    conjs;
+  let fv_uclasses =
+    BatSet.Int.fold (fun fv urefs ->
+        if List.mem (fv_classes fv) urefs then urefs
+        else (fv_classes fv) :: urefs)
+      fvcands
       []
   in
-  let cells_fvs = 
-    List.map (fun cell ->
-        List.map (fun s -> 
-            Hashtbl.find syms_to_fvs s) 
-          (Symbol.Set.elements cell)
-        |> BatSet.Int.of_list)
-      cells_syms
-  in
-  cells_fvs
-
+  let fv_classes = List.map (fun uref -> BatUref.uget uref) fv_uclasses in
+  fv_classes
+ 
 
 let iter_fvs f props =
   let _ = List.fold_left (fun fv_counter prop ->
@@ -1001,6 +988,7 @@ let pos_bool_elim srk phi syms =
 
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
+  let step1 = time () in
   let fp' = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) ->
 
@@ -1010,20 +998,24 @@ let offset_analysis srk fp =
         conc, hypo, phi')
       fp
   in
-
+  let step2b = time () in
+ 
   let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
     determine_offsets srk fp'
   in
+  let step2 = time () in
   let fp'' = 
     apply_offset_candidates_new srk fp' cell_to_offsets chcvar_to_cell sym_to_cell 
   in
 
+  let step3 = time () in
   let fp'' = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) ->
         conc, hypo, pos_bool_elim srk constr (Hashtbl.find skolemized_vars ind))
       fp''
   in
 
+  let step4 = time () in
   (* Unskolemize *)
   let fp'3 = 
     Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
@@ -1038,7 +1030,7 @@ let offset_analysis srk fp =
       fp''
   in
 
-
+  let step5 = time () in
   let fp'3 = 
     Fp.map_rules (fun (conc, hypo, constr) ->
         let constr'' = Quantifier.miniscope srk constr in
@@ -1056,11 +1048,14 @@ let offset_analysis srk fp =
       fp'3
   in
 
+  let step6 = time () in
+
+  diff step1 step2 "1 to 2";
+  diff step1 step2b "1 to 2b";
+  diff step2 step3 "2 to 3"; 
+  diff step3 step4 "3 to 4";
+  diff step4 step5 "4 to 5";
+  diff step5 step6 "5 to 6";
+ 
   let fp'3 =check_q_array_chc srk fp'3 in
-
-
-  (* try some of the exist quant generalization functions *)
-
   fp'3
-
-
