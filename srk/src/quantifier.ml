@@ -2984,10 +2984,11 @@ let eq_guided_qe_helper srk phi =
   let union lsts = List.flatten lsts in
 
   let subst phi cand_term =
-    substitute srk (fun (ind, typ) ->
-        if ind = 0 then cand_term
+    let term = substitute srk (fun (ind, typ) ->
+      if ind = 0 then cand_term
         else mk_var srk (ind - 1) typ)
-      phi
+      phi in
+    term
   in
 
   let find_subst typ eqs diseqs fv_tru fv_fls  =

@@ -3,7 +3,6 @@ open Srk
 open CfgIr
 open BatPervasives
 open Iteration
-open Pmfa
 module RG = Interproc.RG
 module WG = WeightedGraph
 module TLLRF = TerminationLLRF
@@ -1166,8 +1165,9 @@ i*)
     let t = Unix.gettimeofday () in
     (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-  let diff _ _ _ = () 
-    (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*)
+ let diff t1 t2 s = 
+   Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+
 
 let array_analyze file =
 
@@ -1187,9 +1187,10 @@ let array_analyze file =
   assert (1 = 2);
 *)
 
-  (*let init = time "init" in*)
+(*let init = time "init" in*)
+  let init = time () in
   let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
-  let fp = Pmfa.elim_ite_chc srk fp in
+  let fp = ShOffsetAnalysis.elim_ite_chc srk fp in
   (*let _ = determine_eq_ints_chc srk fp in*)
   (*List.iter (fun (_, _, constr) ->
       Pmfa.get_offset_cands srk constr)
@@ -1206,9 +1207,10 @@ let array_analyze file =
         names;
     )
     classes;*)
-  let fp = offset_analysis srk fp in
+  let fp = ShOffsetAnalysis.offset_analysis srk fp in
   (*let _ = determine_offsets srk fp in*)
-
+  let offsetdone = time () in
+  diff init offsetdone "offset done";
 
   
     let phi = Chc.Fp.query_vc_condition srk fp ad in
@@ -1222,7 +1224,7 @@ let array_analyze file =
       (Quantifier.miniscope srk phi)
   in*)
 
-  let phi = Pmfa.eliminate_stores srk phi in
+  let phi = ShOffsetAnalysis.eliminate_stores srk phi in
   let phi = Syntax.eliminate_ite srk phi in
 
   (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
