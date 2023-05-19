@@ -1530,11 +1530,19 @@ let node_typ symbols label children =
     begin match children with
       | [a; i; v] -> begin match a.obj, i.obj, v.obj with
           | Node (_, _, `TyArr), Node(_, _, `TyInt), Node (_, _, `TyInt)  -> `TyArr
-          | _ -> invalid_arg "invalid array store"
+          |  Node (_, _, `TyArr), Node(_, _, `TyInt), Node (_, _, `TyReal)  -> `TyArr 
+          (* Real indices are admitted... they do come up in some examples,
+             but potentially undesirable *)
+          |  Node (_, _, `TyArr), Node(_, _, `TyReal), Node (_, _, `TyInt)  -> `TyArr 
+
+          |  Node (_, _, `TyArr), Node(_, _, `TyReal), Node (_, _, `TyReal)  -> `TyArr 
+
+          | _ -> invalid_arg "invalid array storeJake"
         end
       |  _ -> assert false
     end
-  | Select ->
+  | Select -> 
+      (* TODO: have int vs real arrays?*)
     begin match children with
       | [a; i] -> begin match a.obj, i.obj with
           | Node (_, _, `TyArr), Node(_, _, `TyInt) -> `TyInt
