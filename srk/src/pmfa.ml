@@ -7,8 +7,8 @@ let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-let diff t1 t2 s = 
-  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
+let diff _t1 _t2 _s = 
+  (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*) ()
 
 let typ_symbol_fo srk sym =
     match typ_symbol srk sym with
@@ -1061,10 +1061,8 @@ module OldPmfa = struct
       let nstar = mk_and srk [nstar; nstar2] in
 
 
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar_pre.smt2";
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
 
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar_post.smt2";
 
       let nstarreal = time "nstarreal" in
 
