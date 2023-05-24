@@ -921,95 +921,6 @@ let skolemize_eh_chc srk fp =
   in
   Formula.eval srk alg phi
 
-
-let pos_bool_elim srk phi syms =
-  let bool_fvs = ref Symbol.Set.empty in
-  let syms_to_fvs = Hashtbl.create 97 in
-  let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
-      let sym = mk_symbol srk ~name:"POS_BOOL" (typ :> typ) in
-      if typ = `TyBool
-      then bool_fvs := Symbol.Set.add sym !bool_fvs
-      else ();
-      Hashtbl.add syms_to_fvs sym (ind, typ);
-      mk_const srk sym) 
-  in
-  let phi = substitute srk fvs_to_syms phi in
-  let ctx = Z3.mk_context [] in
-  let solver = Z3.Solver.mk_simple_solver ctx in
-
-
-  Log.errorf "not even entered";
-  let phi = Symbol.Set.fold (fun sym phi ->
-      Log.errorf "entered";
-      let bool_check = SrkZ3.z3_of_formula srk ctx 
-          (mk_and srk [phi; mk_not srk (mk_const srk sym)]) in
-      Z3.Solver.add solver [bool_check];
-      match Z3.Solver.check solver [] with
-        | Z3.Solver.UNSATISFIABLE ->
-          Log.errorf "Unsat1";
-          Z3.Solver.reset solver;
-          let substed = 
-            substitute_const
-              srk
-              (fun s -> if sym = s then mk_true srk else mk_const srk s)
-              phi
-          in
-          if Symbol.Set.mem sym !bool_fvs then
-            mk_and srk [substed; mk_const srk sym]
-          else substed
-        | Z3.Solver.SATISFIABLE ->
-          Log.errorf "unsat2";
-          Z3.Solver.reset solver;
-          let abool_check = 
-            SrkZ3.z3_of_formula srk ctx (mk_and srk [phi; (mk_const srk sym)]) in
-          Z3.Solver.add solver [abool_check];
-          begin match Z3.Solver.check solver [] with
-          | Z3.Solver.UNSATISFIABLE ->
-            Log.errorf "Unsat3";
-            Z3.Solver.reset solver;
-            let substed = 
-              substitute_const
-                srk
-                (fun s -> if sym = s then mk_false srk else mk_const srk s)
-                phi
-            in
-            if Symbol.Set.mem sym !bool_fvs then
-              mk_and srk [substed; mk_not srk (mk_const srk sym)]
-            else substed
-          | Z3.Solver.SATISFIABLE ->
-            Log.errorf "unsat4";
-            Z3.Solver.reset solver;
-            phi
-          | Z3.Solver.UNKNOWN ->
-            Log.errorf "unsat5";
-            Z3.Solver.reset solver;
-            failwith "pos_bool_elim failure" 
-          end
-        | Z3.Solver.UNKNOWN -> 
-          Log.errorf "6 of course 6";
-          Z3.Solver.reset solver;
-          failwith "pos_bool_elim failure" )
-      (Symbol.Set.union
-         (Symbol.Set.filter (fun sym -> typ_symbol srk sym = `TyBool) syms)
-         !bool_fvs)
-    phi
-  in
-
-  let phi = 
-    substitute_const
-      srk
-      (fun s -> 
-         if Hashtbl.mem syms_to_fvs s
-         then
-           let ind, typ = Hashtbl.find syms_to_fvs s in
-           mk_var srk ind typ
-         else mk_const srk s)
-      phi
-  in
-  phi
-
-
-(*
 let pos_bool_elim srk phi syms =
   let bool_fvs = ref Symbol.Set.empty in
   let syms_to_fvs = Hashtbl.create 97 in
@@ -1071,7 +982,7 @@ let pos_bool_elim srk phi syms =
          else mk_const srk s)
       phi
   in
-  phi*)
+  phi
 
 let offset_analysis srk fp =
   let skolemized_vars = BatHashtbl.create 97 in
@@ -1102,10 +1013,7 @@ let offset_analysis srk fp =
         conc, hypo, pos_bool_elim srk constr (Hashtbl.find skolemized_vars ind))
       fp''
   in
-  Z3.Memory.reset ();
-
-  Gc.full_major ();
-  Gc.compact ();
+  
   let step4 = time () in
   (* Unskolemize *)
   let fp'3 = 
