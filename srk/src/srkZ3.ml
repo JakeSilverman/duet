@@ -27,6 +27,8 @@ type 'a open_expr = [
   | `IsInt of 'a list
 ]
 
+let global_context = Z3.mk_context []
+
 let bool_val x =
   match Z3.Boolean.get_bool_value x with
   | Z3enums.L_TRUE -> true
@@ -675,7 +677,7 @@ let load_smtlib2 ?(context=get_default_context ()) srk str =
          | `Term _ -> invalid_arg "load_smtlib2")
   |> mk_and srk
 
-let load_smtlib2_file ?(context=Z3.mk_context []) srk str =
+let load_smtlib2_file ?(context=global_context) srk str =
   let z3 = context in
   let ast = Z3.SMT.parse_smtlib2_file z3 str [] [] [] [] in
   let sym_of_decl =
