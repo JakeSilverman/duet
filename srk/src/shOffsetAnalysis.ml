@@ -265,6 +265,7 @@ let local_partiton_and_cands srk constr int_fvs_set _ =
         | Sym _ -> b_c, (a_vars @ b_vars), a_rw || b_rw
       in
       BatUref.unite ~sel (arr_tbl a) (arr_tbl b)
+    | `Atom (`IsInt _)
     | `Ite _ -> assert false
   and arr_term_alg = function
     | `App (sym, []) -> Sym sym 

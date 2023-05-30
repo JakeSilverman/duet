@@ -24,9 +24,9 @@ type 'a open_expr = [
   | `Ite of 'a * 'a * 'a
   | `Quantify of [`Exists | `Forall] * string * typ_fo * 'a
   | `Atom of [`Eq | `Leq | `Lt] * 'a * 'a
+  | `IsInt of 'a list
 ]
 
-let global_context = Z3.mk_context []
 
 let bool_val x =
   match Z3.Boolean.get_bool_value x with
@@ -57,7 +57,7 @@ let rec sort_of_typ z3 = function
   | `TyInt -> Z3.Arithmetic.Integer.mk_sort z3
   | `TyReal -> Z3.Arithmetic.Real.mk_sort z3
   | `TyBool -> Z3.Boolean.mk_sort z3
-  | `TyArr -> 
+  | `TyArr ->
     Z3.Z3Array.mk_sort z3 (sort_of_typ z3 `TyInt) (sort_of_typ z3 `TyInt)
 
 let rec eval alg ast =
@@ -68,7 +68,8 @@ let rec eval alg ast =
       let decl = Expr.get_func_decl ast in
       let args = List.map (eval alg) (Expr.get_args ast) in
       match FuncDecl.get_decl_kind decl, args with
-      | (OP_UNINTERPRETED, args) -> alg (`App (decl, args))
+      | (OP_UNINTERPRETED, args) ->
+         alg (`App (decl, args))
       | (OP_ADD, args) -> alg (`Add args)
       | (OP_MUL, args) -> alg (`Mul args)
       | (OP_SUB, [x;y]) -> alg (`Add [x; alg (`Unop (`Neg, y))])
@@ -81,8 +82,8 @@ let rec eval alg ast =
       | (OP_TO_INT, [x]) -> alg (`Unop (`Floor, x))
 
       | (OP_STORE, [a; i; v]) -> alg (`Store (a, i, v))
-      | (OP_SELECT, [a; i]) -> alg (`Binop(`Select, a, i))
-      
+      | (OP_SELECT, [a; i]) -> alg (`Binop (`Select, a, i))
+
       | (OP_TRUE, []) -> alg `Tru
       | (OP_FALSE, []) -> alg `Fls
       | (OP_AND, args) -> alg (`And args)
@@ -99,6 +100,22 @@ let rec eval alg ast =
       | (OP_LT, [s; t]) -> alg (`Atom (`Lt, s, t))
       | (OP_GT, [s; t]) -> alg (`Atom (`Lt, t, s))
       | (OP_ITE, [cond; s; t]) -> alg (`Ite (cond, s, t))
+      | (OP_IS_INT, [s]) -> alg (`IsInt [s])
+      | (OP_DISTINCT, xs) ->
+         let neq x y = alg (`Not (alg (`Atom (`Eq, x, y)))) in
+         let rec all_pairs = function
+           | [] -> [alg `Tru]
+           | y1 :: ys ->
+              List.fold_left (fun pairs y2 -> neq y1 y2 :: pairs) (all_pairs ys) ys
+         in
+         alg (`And (all_pairs xs))
+      | (OP_XOR, xs) ->
+        let xor x y =
+          alg (`Or [alg (`And [alg (`Not x); y]);
+                    alg (`And [x; alg (`Not y)])])
+        in
+        BatList.reduce xor xs
+
       | (_, _) -> invalid_arg ("eval: unknown application: "
                                ^ (Expr.to_string ast))
     end
@@ -214,7 +231,7 @@ and z3_of_arr_term (srk : 'a context) z3 (term : 'a arr_term) =
 
     | `Var (i, `TyArr) ->
       Z3.Quantifier.mk_bound z3 i (sort_of_typ z3 `TyArr)
-    | `Store (a, i, v) -> 
+    | `Store (a, i, v) ->
       Z3.Z3Array.mk_store z3 a (z3_of_arith_term srk z3 i) (z3_of_arith_term srk z3 v)
     | `Ite (cond, bthen, belse) ->
       Z3.Boolean.mk_ite z3 (z3_of_formula srk z3 cond) bthen belse
@@ -279,12 +296,47 @@ and z3_of_formula srk z3 =
     | `Not phi -> Z3.Boolean.mk_not z3 phi
     | `Quantify (qt, name, typ, phi) ->
       mk_quantified z3 qt ~name typ phi
-    | `Atom (`Arith (`Eq, s, t)) -> Z3.Boolean.mk_eq z3 (of_arith_term s) (of_arith_term t)
+    | `Atom (`Arith (`Eq, s, t)) ->
+      begin
+        let default () =
+          Z3.Boolean.mk_eq z3 (of_arith_term s) (of_arith_term t)
+        in
+(*n        try
+          match s with
+          |
+        with Linear.Nonlinear -> default ()
+*)
+        default ()
+      end
     | `Atom (`Arith (`Leq, s, t)) -> Z3.Arithmetic.mk_le z3 (of_arith_term s) (of_arith_term t)
     | `Atom (`Arith (`Lt, s, t)) -> Z3.Arithmetic.mk_lt z3 (of_arith_term s) (of_arith_term t)
     | `Atom (`ArrEq (s, t)) -> Z3.Boolean.mk_eq z3 (of_arr_term s) (of_arr_term t)
     | `Proposition (`Var i) ->
       Z3.Quantifier.mk_bound z3 i (sort_of_typ z3 `TyBool)
+    | `Atom (`IsInt s) ->
+      begin
+        let default () =
+          Z3.Arithmetic.Real.mk_is_integer z3
+            (z3_of_expr srk z3 (s :> ('a, typ_fo) expr))
+        in
+        try
+          (* Z3 handles mod better than is_int, so translate to mod if
+             possible. *)
+          let lin = Linear.linterm_of srk s in
+          let denom = Linear.QQVector.common_denominator lin in
+          let t = Linear.QQVector.scalar_mul (QQ.of_zz denom) lin
+                  |> Linear.of_linterm srk
+          in
+          (match expr_typ srk t with
+           | `TyInt ->
+             let d = Z3.Arithmetic.Integer.mk_numeral_s z3 (ZZ.show denom) in
+             let t = z3_of_expr srk z3 (t :> ('a, typ_fo) expr) in
+             Z3.Boolean.mk_eq z3
+               (Z3.Arithmetic.Integer.mk_mod z3 t d)
+               (Z3.Arithmetic.Integer.mk_numeral_i z3 0)
+           | _ -> default ())
+        with Linear.Nonlinear -> default ()
+      end
     | `Proposition (`App (p, [])) ->
       let decl =
         Z3.FuncDecl.mk_const_decl z3
@@ -311,11 +363,14 @@ let of_z3 context sym_of_decl expr =
     | `App (decl, args) ->
       let const_sym = sym_of_decl decl in
       mk_app context const_sym args
+    | `IsInt args ->
+       (mk_and context
+          (List.map (fun x -> x |> arith_term |> mk_is_int context) args) :> 'a gexpr)
     | `Add sum -> (mk_add context (List.map arith_term sum) :> 'a gexpr)
     | `Mul product -> (mk_mul context (List.map arith_term product) :> 'a gexpr)
     | `Binop (`Div, s, t) -> (mk_div context (arith_term s) (arith_term t) :> 'a gexpr)
-    | `Binop (`Mod, s, t) -> (mk_mod context (arith_term s) (arith_term t) :> 'a gexpr) 
-    | `Binop (`Select, a, i) -> (mk_select context (arr_term a) (arith_term i) :> 'a gexpr) 
+    | `Binop (`Mod, s, t) -> (mk_mod context (arith_term s) (arith_term t) :> 'a gexpr)
+    | `Binop (`Select, a, i) -> (mk_select context (arr_term a) (arith_term i) :> 'a gexpr)
     | `Unop (`Floor, t) -> (mk_floor context (arith_term t) :> 'a gexpr)
     | `Unop (`Neg, t) -> (mk_neg context (arith_term t) :> 'a gexpr)
     | `Store (a, i, v) -> (mk_store context (arr_term a) (arith_term i) (arith_term v) :> 'a gexpr)
@@ -378,8 +433,18 @@ type 'a solver =
     formula_of : z3_expr -> 'a formula;
     of_formula : 'a formula -> z3_expr }
 
-let mk_solver ?(context=global_context) ?(theory="") srk =
-  let s = 
+let get_default_context =
+  let default_context = ref None in
+  fun () ->
+    match !default_context with
+    | Some ctx -> ctx
+    | None ->
+      let ctx = Z3.mk_context [] in
+      default_context := Some ctx;
+      ctx
+
+let mk_solver ?(context=get_default_context ()) ?(theory="") srk =
+  let s =
     if theory = "" then
       Z3.Solver.mk_simple_solver context
     else
@@ -441,7 +506,10 @@ module Solver = struct
     | `TyFun (params, _) ->
       let decl = decl_of_symbol z3 srk sym in
       let finterp = match Z3.Model.get_func_interp m decl with
-        | None -> assert false
+        | None ->
+          logf "symbol: %a" (pp_symbol srk) sym;
+          assert false
+
         | Some interp -> interp
       in
       let formals =
@@ -517,7 +585,7 @@ module Solver = struct
   let get_reason_unknown solver = Z3.Solver.get_reason_unknown solver.s
 end
 
-let optimize_box ?(context=global_context) srk phi objectives =
+let optimize_box ?(context=get_default_context ()) srk phi objectives =
   let open Z3.Optimize in
   let z3 = context in
   let opt = mk_opt z3 in
@@ -578,7 +646,7 @@ let optimize_box ?(context=global_context) srk phi objectives =
 let interpolate_seq ?context:_ _ _ =
   failwith "SrkZ3.interpolate_seq not implemented"
 
-let load_smtlib2 ?(context=global_context) srk str =
+let load_smtlib2 ?(context=get_default_context ()) srk str =
   let z3 = context in
   let ast = Z3.SMT.parse_smtlib2_string z3 str [] [] [] [] in
   let sym_of_decl =
@@ -606,7 +674,7 @@ let load_smtlib2 ?(context=global_context) srk str =
          | `Term _ -> invalid_arg "load_smtlib2")
   |> mk_and srk
 
-let load_smtlib2_file ?(context=global_context) srk str =
+let load_smtlib2_file ?(context=get_default_context ()) srk str =
   let z3 = context in
   let ast = Z3.SMT.parse_smtlib2_file z3 str [] [] [] [] in
   let sym_of_decl =
@@ -643,7 +711,7 @@ let of_apply_result srk result =
   List.map (of_goal srk) (Z3.Tactic.ApplyResult.get_subgoals result)
   |> mk_and srk
 
-let qe ?(context=global_context) srk phi =
+let qe ?(context=get_default_context ()) srk phi =
   let open Z3 in
   let z3 = context in
   let solve = Tactic.mk_tactic z3 "qe" in
@@ -653,7 +721,7 @@ let qe ?(context=global_context) srk phi =
   Goal.add g [z3_of_formula srk z3 phi];
   of_apply_result srk (Tactic.apply qe g None)
 
-let simplify ?(context=global_context) srk phi =
+let simplify ?(context=get_default_context ()) srk phi =
   let open Z3 in
   let open Tactic in
   let z3 = context in
@@ -686,7 +754,7 @@ module CHC = struct
       mutable head_relations : Symbol.Set.t;
       fp : Z3.Fixedpoint.fixedpoint }
 
-  let mk_solver ?(context=global_context) srk =
+  let mk_solver ?(context=get_default_context ()) srk =
     let fp = Z3.Fixedpoint.mk_fixedpoint context in
     let error = mk_symbol srk ~name:"error" (`TyFun ([], `TyBool)) in
     let error_decl = decl_of_symbol context srk error in

@@ -182,6 +182,11 @@ and evaluate_formula interp ?(env=Env.empty) phi =
         with Divide_by_zero -> false
       end
     | `Atom (`ArrEq _) -> invalid_arg "evaluate_formula: array atom"
+    | `Atom (`IsInt s) ->
+       begin match QQ.to_int (evaluate_term interp ~env s) with
+       | Some _ -> true
+       | None -> false
+       end
     | `Not v -> not v
     | `Ite (cond, bthen, belse) -> if cond then bthen else belse
     | `Proposition (`App (k, [])) -> bool interp k
@@ -264,7 +269,7 @@ let select_implicant interp ?(env=Env.empty) phi =
           (t, t_implicant@implicant)
         | None ->
           let not_cond =
-            rewrite srk ~down:(nnf_rewriter srk) (mk_not srk cond)
+            rewrite srk ~down:(pos_rewriter srk) (mk_not srk cond)
           in
           match formula not_cond with
           | Some implicant ->
@@ -278,21 +283,18 @@ let select_implicant interp ?(env=Env.empty) phi =
     | `Fls -> None
     | `Or disjuncts ->
       (* Find satisfied disjunct *)
-      let f disjunct phi =
-        match disjunct with
-        | None -> formula phi
-        | _ -> disjunct
-      in
-      List.fold_left f None disjuncts
+      BatList.find_map_opt formula disjuncts
     | `And conjuncts ->
       (* All conjuncts must be satisfied *)
-      let f phi =
-        match formula phi with
-        | Some x -> x
-        | None -> raise Not_found
+      let rec loop implicant = function
+        | [] -> Some implicant
+        | phi::conjuncts ->
+          match formula phi with
+          | Some phi_implicant ->
+            loop (BatList.rev_append phi_implicant implicant) conjuncts
+          | None -> None
       in
-      (try Some (BatList.concat (List.map f conjuncts))
-       with Not_found -> None)
+      loop [] conjuncts
     | `Atom (`Arith (op, s, t)) ->
       let (s_term, s_impl) = term s in
       let (t_term, t_impl) = term t in
@@ -311,12 +313,13 @@ let select_implicant interp ?(env=Env.empty) phi =
               Some (cons_nontriv (mk_leq srk s_term t_term) (s_impl@t_impl))
             | `Lt when QQ.lt s_val t_val ->
               Some (cons_nontriv (mk_lt srk s_term t_term) (s_impl@t_impl))
-            | _ ->
-              None
+            | _ -> None
           end
         with Divide_by_zero -> None
       end
     | `Atom (`ArrEq _) -> assert false
+    | `Atom (`IsInt _s) ->
+       if evaluate_formula interp ~env phi then Some [phi] else None
     | `Proposition (`App (p, [])) ->
       if bool interp p then Some [phi]
       else None
@@ -328,6 +331,8 @@ let select_implicant interp ?(env=Env.empty) phi =
       end
     | `Not psi ->
       begin match Formula.destruct srk psi with
+        | `Atom (_) ->
+          if not (evaluate_formula interp ~env psi) then Some [phi] else None
         | `Proposition (`App (p, [])) ->
           if not (bool interp p) then
             Some [phi]
@@ -340,7 +345,11 @@ let select_implicant interp ?(env=Env.empty) phi =
             | _ ->
               invalid_arg "select_implicant: ill-typed propositional variable"
           end
-        | _ -> invalid_arg "select_implicant: negation"
+        | `Fls -> Some []
+        | `Tru -> None
+        | _ ->
+          invalid_arg (Format.asprintf "select_implicant: negation (%a)"
+                         (Formula.pp srk) psi)
       end
     | `Ite (cond, bthen, belse) ->
       begin match formula cond with
@@ -409,6 +418,17 @@ let destruct_atom srk phi =
   | `Tru ->
     let zero = mk_real srk QQ.zero in
     `ArithComparison (`Eq, zero, zero)
+  | `Atom (`IsInt t) ->
+    (* Z3 does not like mod 1 -- avoid if possible. *)
+    begin
+      try
+        let lin = Linear.linterm_of srk t in
+        let denom = QQ.of_zz (Linear.QQVector.common_denominator lin) in
+        let t = Linear.QQVector.scalar_mul denom lin |> Linear.of_linterm srk in
+        `ArithComparison (`Eq, mk_mod srk t (mk_real srk denom), mk_zero srk)
+      with Linear.Nonlinear ->
+        `ArithComparison (`Eq, mk_mod srk t (mk_one srk), mk_zero srk)
+    end
   | `Fls -> `ArithComparison (`Eq, mk_real srk QQ.zero, mk_real srk QQ.one)
   | _ ->
     invalid_arg @@ Format.asprintf "destruct_atom: %a is not atomic" (Formula.pp srk) phi
