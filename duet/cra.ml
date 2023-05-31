@@ -1285,6 +1285,10 @@ i*)
    (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*) ()
 
 
+module CHC = Chc.Make(Ctx)
+
+
+
 let array_analyze file =
 
 (*
@@ -1305,8 +1309,8 @@ let array_analyze file =
 
 (*let init = time "init" in*)
   let init = time () in
-  let fp = Chc.ChcSrkZ3.parse_file srk file.filename in
-  let fp = ShOffsetAnalysis.elim_ite_chc srk fp in
+  let fp = CHC.ChcSrkZ3.parse_file file.filename in
+  let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
   (*let _ = determine_eq_ints_chc srk fp in*)
   (*List.iter (fun (_, _, constr) ->
       Pmfa.get_offset_cands srk constr)
@@ -1323,13 +1327,15 @@ let array_analyze file =
         names;
     )
     classes;*)
-  let fp = ShOffsetAnalysis.offset_analysis srk fp in
+  let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
+
+  (*let inv = CHC.Fp.rel_invariants*) 
   (*let _ = determine_offsets srk fp in*)
   let offsetdone = time () in
   diff init offsetdone "offset done";
 
   
-    let phi = Chc.Fp.query_vc_condition srk fp ad in
+    let phi = CHC.Fp.query_vc_condition fp ad in
 
   
   let phi = Syntax.eliminate_ite srk phi in
@@ -1340,7 +1346,7 @@ let array_analyze file =
       (Quantifier.miniscope srk phi)
   in*)
 
-  let phi = ShOffsetAnalysis.eliminate_stores srk phi in
+  let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
   let phi = Syntax.eliminate_ite srk phi in
 
   (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
