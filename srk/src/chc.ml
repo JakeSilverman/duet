@@ -6,7 +6,6 @@ module D = Graph.Pack.Digraph
 module WG = WeightedGraph
 
 
-
 let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
@@ -297,8 +296,6 @@ module Make
         | Zero -> None
         | Edge (p_conc, p_hypo, phi) ->
           let vars = vars_memo (p_conc, p_hypo) in
-          Log.errorf "VARS ARE";
-          List.iter (fun sym -> Log.errorf "var is %a" (pp_symbol srk) sym) vars;
           let phi =
             substitute
               srk
@@ -308,8 +305,8 @@ module Make
                  else failwith "Additional fv in rule")
               phi
           in
+          let phi = eliminate_arr_eq srk phi in
           let phi = over_approx_arrays phi in
-          Log.errorf "Constr was %a" (Formula.pp srk) phi;
           let pre' =
             substitute_const
               srk
@@ -319,13 +316,23 @@ module Make
                    (List.nth vars ((Hashtbl.find var_to_sym sym) + List.length p_conc)))
               (D.formula_of pre)
           in
-          Log.errorf "pre is %a" (Formula.pp srk) pre';
+          let post =
+            substitute_const
+              srk
+              (fun sym -> 
+                 mk_const 
+                   srk
+                   (List.nth vars ((Hashtbl.find var_to_sym sym))))
+              (D.formula_of post)
+          in
           let conc_symbols, _ = BatList.split_at (List.length p_conc) vars in
           let exists sym = List.mem sym conc_symbols in
+          (* TODO: this is clunky... you're switching var names each time and
+           * this is causing post to lose info. Note that Abs (concrete (a)) != a *)
+          let post = Abs.abstract ~exists (module D) post in
           let post' = Abs.abstract ~exists (module D) (mk_and srk [phi; pre']) in
-          Log.errorf "Post' is %a" (Formula.pp srk) (D.formula_of post');
-          Log.errorf "Post is %a" (Formula.pp srk) (D.formula_of post);
-          if D.equal post' post then None else Some (D.join post' post)
+          let post' = Abs.abstract ~exists (module D) (D.formula_of post') in
+          if D.equal (D.join post' post) post then None else Some (D.join post' post)
       in
       let init v =
         if v = start_vert then
@@ -388,7 +395,16 @@ module Make
           fp.queries
           wg
       in
-      let _inv = annotate_wg (module Abs.Sign) wg in 
+      let _inv = annotate_wg (module Abs.Sign) wg in
+      WG.iter_vertex (fun vertex ->
+          Log.errorf "vertex %n has post %a" vertex (Formula.pp srk) (Abs.Sign.formula_of (_inv vertex))) wg;
+      (*WG.iter_succ_e (fun (v1, e, v2) ->
+          match e with
+          | One -> Log.errorf "Edge %n to %n is \n TRUE" v1 v2
+          | Zero -> Log.errorf "Edge %n to %n is \n False" v1 v2
+          | Edge (_, _, constr) -> Log.errorf "Edge %n to %n to \n" v1 v2)
+        wg
+        start_vert;*)
       wg
 
     let stratify fp =
