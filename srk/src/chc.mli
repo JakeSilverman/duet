@@ -48,10 +48,6 @@ module Make
 
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
-    val rel_invariants : (module Absd with type t = 'a) ->
-                           fp ->
-                           proposition list ->
-                          (int, (C.t formula)) Hashtbl.t
     val stratify : t -> Symbol.Set.t list option
     (** [check srk fp pd] returns unknown if a query relation can
      * be reached in the fp where recursion over-approximated using the 

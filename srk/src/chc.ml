@@ -257,6 +257,85 @@ module Make
         Edge (p_c, p_h, phi') 
 
 
+    let over_approx_arrays phi =
+      let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
+      let bools = Memo.memo (fun _ -> mk_symbol srk `TyBool) in
+      let mk_op op =
+        match op with
+        | `Eq -> mk_eq
+        | `Lt -> mk_lt
+        | `Leq -> mk_leq
+      in
+      let arith_alg = function
+        | `Select (a, i) -> mk_const srk (nums (`Select(a, i)))
+        | open_term -> ArithTerm.construct srk open_term
+      in
+      let alg = function
+        | `Atom (`Arith (op, x, y)) ->
+          (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
+        | `Atom(`ArrEq (a, b)) ->
+          mk_const srk (bools (`Atom(`ArrEq(a, b))))
+        | open_formula -> Formula.construct srk open_formula
+      in
+      Formula.eval srk alg phi
+
+    module Abs = Abstract.MakeAbstractRSY(C)
+    module type Absd = Abstract.MakeAbstractRSY(C).Domain
+
+    let annotate_wg (type a) (module D : Absd with type t = a) wg = 
+      let var_to_sym = Hashtbl.create 97 in
+      let vars_memo = Memo.memo (fun (p_conc, p_hypo) ->
+          List.mapi (fun ind (name, typ) ->
+              let s = mk_symbol srk ~name:name (typ :> typ) in
+              Hashtbl.add var_to_sym s ind;
+              s)
+            (p_conc @ p_hypo))
+      in
+      let update ~pre edge ~post =
+        match edge with
+        | One -> if D.equal post D.top then None else Some D.top
+        | Zero -> None
+        | Edge (p_conc, p_hypo, phi) ->
+          let vars = vars_memo (p_conc, p_hypo) in
+          Log.errorf "VARS ARE";
+          List.iter (fun sym -> Log.errorf "var is %a" (pp_symbol srk) sym) vars;
+          let phi =
+            substitute
+              srk
+              (fun (ind, _) ->
+                 if ind < (List.length p_conc + List.length p_hypo)
+                 then mk_const srk (List.nth vars ind)
+                 else failwith "Additional fv in rule")
+              phi
+          in
+          let phi = over_approx_arrays phi in
+          Log.errorf "Constr was %a" (Formula.pp srk) phi;
+          let pre' =
+            substitute_const
+              srk
+              (fun sym -> 
+                 mk_const 
+                   srk
+                   (List.nth vars ((Hashtbl.find var_to_sym sym) + List.length p_conc)))
+              (D.formula_of pre)
+          in
+          Log.errorf "pre is %a" (Formula.pp srk) pre';
+          let conc_symbols, _ = BatList.split_at (List.length p_conc) vars in
+          let exists sym = List.mem sym conc_symbols in
+          let post' = Abs.abstract ~exists (module D) (mk_and srk [phi; pre']) in
+          Log.errorf "Post' is %a" (Formula.pp srk) (D.formula_of post');
+          Log.errorf "Post is %a" (Formula.pp srk) (D.formula_of post);
+          if D.equal post' post then None else Some (D.join post' post)
+      in
+      let init v =
+        if v = start_vert then
+          D.top
+        else
+          D.bottom
+      in
+      let entry = start_vert in
+      WG.forward_analysis wg ~entry ~update ~init
+
     let linchc_to_weighted_graph fp pd =
       let open WeightedGraph in
       let index = ref 0 in
@@ -309,6 +388,7 @@ module Make
           fp.queries
           wg
       in
+      let _inv = annotate_wg (module Abs.Sign) wg in 
       wg
 
     let stratify fp =
@@ -380,78 +460,6 @@ module Make
       in
       if is_strat then Some (List.rev ordering) else None
 
-    module Abs = Abstract.MakeAbstractRSY(C)
-    module type Absd = Abstract.MakeAbstractRSY(C).Domain
-
-    let rel_invariants (type a) (module D : Absd with type t = a) fp ordering = 
-      let inv = Hashtbl.create 97 in
-      List.iter (fun rel ->
-          let conc_symbols = List.map2 (fun typ name ->
-              mk_symbol srk ~name (typ :> typ))
-              (Proposition.typ_of_params rel)
-              (Proposition.names_of rel)
-          in
-          let conc_only = 
-            List.filter (fun (conc, hypo_props, _) -> 
-                let hypo_rels = List.map Proposition.symbol_of hypo_props in
-                conc.symbol = rel.symbol && not (List.mem rel.symbol hypo_rels))
-              fp.rules
-          in
-          let conc_and_hypo = 
-            List.filter (fun (conc, hypo_props, _) -> 
-                let hypo_rels = List.map Proposition.symbol_of hypo_props in
-                conc.symbol = rel.symbol && List.mem rel.symbol hypo_rels)
-              fp.rules
-          in
-          let constrs rules = List.map (fun (conc, hypo_props, constr) ->
-              let (constr', _) = List.fold_left (fun (constr, param_counter) prop -> 
-                  let num_params = List.length (Proposition.typ_of_params prop) in
-                  let soln = 
-                    if Hashtbl.mem inv (int_of_symbol prop.symbol) then (
-                      substitute
-                        srk
-                        (fun (i, typ) -> mk_var srk (i + param_counter) typ)
-                        (Hashtbl.find inv (int_of_symbol prop.symbol)))
-                    else mk_true srk
-                  in
-                  let constr = mk_and srk [soln; constr] in
-                  constr, param_counter + num_params)
-                  (constr, List.length (Proposition.typ_of_params conc))
-                  hypo_props
-              in
-              let syms = Memo.memo (fun (ind, typ) -> 
-                  if ind < List.length conc_symbols then List.nth conc_symbols ind else
-                    mk_symbol srk (typ :> typ))
-              in
-              substitute
-                srk
-                (fun fv -> mk_const srk (syms fv))
-                constr')
-              rules
-          in
-          let exists sym = List.mem sym conc_symbols in
-          let join_to constrs init = 
-            List.fold_left (fun inv constr ->
-                D.join inv (Abs.abstract ~exists (module D) constr))
-              init
-              constrs
-          in
-          let soln_form proposal =
-            substitute_const
-              srk
-              (fun sym -> 
-                 mk_var
-                   srk
-                   (Option.get (BatList.index_of sym conc_symbols))
-                   (typ_symbol_fo sym))
-              proposal
-          in
-          let soln_proposal = join_to (constrs conc_only) D.bottom in
-          Hashtbl.add inv (int_of_symbol rel.symbol) (soln_form (D.formula_of soln_proposal));
-          let soln = join_to (constrs conc_and_hypo) soln_proposal in
-          Hashtbl.add inv (int_of_symbol rel.symbol) (soln_form (D.formula_of soln)))
-        ordering;
-      inv
 
     let solve_super_lin fp pd ordering =
       let solution = Hashtbl.create 97 in
