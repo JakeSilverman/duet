@@ -393,7 +393,11 @@ module MakeAbstractRSY (C : sig
     let join = Sign.join
     let equal = Sign.equal
     let of_model interp symbols =
-      Sign.of_model interp (List.map (mk_const C.context) symbols)
+      Sign.of_model 
+        interp 
+        (List.map 
+           (mk_const C.context) 
+           (List.filter (fun s -> typ_symbol C.context s = `TyReal || typ_symbol C.context s = `TyInt) symbols))
     let formula_of = Sign.formula_of C.context
   end
 
