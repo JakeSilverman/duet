@@ -292,7 +292,8 @@ module Make
         match edge with
         | One -> if D.equal post D.top then None else Some D.top
         | Zero -> None
-        | Edge (p_conc, _, phi) ->
+        | Edge (p_conc, p_hypo, phi) ->
+          List.iter (fun (name, _) -> Log.errorf "Name is %s" name) (p_conc @ p_hypo);
           let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
           let phi =
             substitute
@@ -303,6 +304,7 @@ module Make
                  else mk_var srk ind typ)
               phi
           in
+          Log.errorf "phi is %a" (Formula.pp srk) phi;
           let num_conc = List.length p_conc in
           let pre' =
             substitute_const
@@ -315,12 +317,16 @@ module Make
                  else mk_const srk sym)
               (D.formula_of pre)
           in
+          Log.errorf "ANNOTATION IS %a" (Formula.pp srk) pre';
           let phi = Formula.skolemize_free srk (mk_and srk [phi; pre']) in
           let phi = eliminate_arr_eq srk phi in
           let phi = over_approx_arrays phi in
-          (* TODO: fix pre... not over correct vars *)
+          Log.errorf "Now phi is %a" (Formula.pp srk) phi;
           let exists sym = List.mem sym conc_vars in
           let post' = Abs.abstract ~exists (module D) phi in
+          to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/finv.smt2";
+
+          (*assert (not (D.equal (D.join post' post) D.bottom));*) 
           if D.equal (D.join post' post) post then None else Some (D.join post' post)
       in
       let init v =
@@ -384,8 +390,26 @@ module Make
           fp.queries
           wg
       in
-      let _inv, _sym_to_var = annotate_wg (module Abs.Sign) wg in
-      (*let wg = 
+      let inv, sym_to_var = annotate_wg (module Abs.Sign) wg in
+      Log.errorf "ALL VERTICES";
+      WG.iter_vertex (fun v -> Log.errorf "Post of %n is %a" v (Formula.pp srk) (Abs.Sign.formula_of (inv v))) wg;
+      Log.errorf "NEXT";
+      let wg = WG.map_weights (fun _ w _ ->
+          match w with
+          | One -> One
+          | Zero -> Zero
+          | Edge (p_conc, p_hypo, constr) ->
+            Log.errorf "OG CONSTR IS %a" (Formula.pp srk) constr;
+            let constr' = Formula.skolemize_free srk constr in
+            begin match Smt.is_sat srk constr' with
+              | `Sat -> Edge (p_conc, p_hypo, constr)
+              | `Unsat -> Edge (p_conc, p_hypo, mk_false srk)
+              | `Unknown -> assert false
+            end;
+        )
+        wg
+      in
+      let wg = 
         WG.map_weights (fun v1 w _ ->
             match w with
             | One -> One
@@ -401,9 +425,10 @@ module Make
                      mk_var srk (ind + num_conc) typ)
                   annotation
               in
+              (*assert (annotation_var != mk_false srk);*)
               Edge (p_conc, p_hypo, mk_and srk [constr; annotation_var]))
           wg
-      in*)
+      in
       wg
 
     let stratify fp =
