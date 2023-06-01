@@ -282,56 +282,45 @@ module Make
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
     let annotate_wg (type a) (module D : Absd with type t = a) wg = 
-      let var_to_sym = Hashtbl.create 97 in
-      let vars_memo = Memo.memo (fun (p_conc, p_hypo) ->
-          List.mapi (fun ind (name, typ) ->
-              let s = mk_symbol srk ~name:name (typ :> typ) in
-              Hashtbl.add var_to_sym s ind;
-              s)
-            (p_conc @ p_hypo))
+      let sym_to_ind = Hashtbl.create 97 in
+      let conc_vars = Memo.memo (fun (ind, typ) -> 
+          let s = mk_symbol srk (typ :> typ) in
+          Hashtbl.add sym_to_ind s (ind, typ);
+          s) 
       in
       let update ~pre edge ~post =
         match edge with
         | One -> if D.equal post D.top then None else Some D.top
         | Zero -> None
-        | Edge (p_conc, p_hypo, phi) ->
-          let vars = vars_memo (p_conc, p_hypo) in
+        | Edge (p_conc, _, phi) ->
+          let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
           let phi =
             substitute
               srk
-              (fun (ind, _) ->
-                 if ind < (List.length p_conc + List.length p_hypo)
-                 then mk_const srk (List.nth vars ind)
-                 else failwith "Additional fv in rule")
+              (fun (ind, typ) ->
+                 if ind < (List.length p_conc)
+                 then mk_const srk (List.nth conc_vars ind)
+                 else mk_var srk ind typ)
               phi
           in
-          let phi = eliminate_arr_eq srk phi in
-          let phi = over_approx_arrays phi in
+          let num_conc = List.length p_conc in
           let pre' =
             substitute_const
               srk
-              (fun sym -> 
-                 mk_const 
-                   srk
-                   (List.nth vars ((Hashtbl.find var_to_sym sym) + List.length p_conc)))
+              (fun sym ->
+                 if Hashtbl.mem sym_to_ind sym
+                 then (
+                   let (ind, typ) = Hashtbl.find sym_to_ind sym in
+                   mk_var srk (ind + num_conc) typ)
+                 else mk_const srk sym)
               (D.formula_of pre)
           in
-          let post =
-            substitute_const
-              srk
-              (fun sym -> 
-                 mk_const 
-                   srk
-                   (List.nth vars ((Hashtbl.find var_to_sym sym))))
-              (D.formula_of post)
-          in
-          let conc_symbols, _ = BatList.split_at (List.length p_conc) vars in
-          let exists sym = List.mem sym conc_symbols in
-          (* TODO: this is clunky... you're switching var names each time and
-           * this is causing post to lose info. Note that Abs (concrete (a)) != a *)
-          let post = Abs.abstract ~exists (module D) post in
-          let post' = Abs.abstract ~exists (module D) (mk_and srk [phi; pre']) in
-          let post' = Abs.abstract ~exists (module D) (D.formula_of post') in
+          let phi = Formula.skolemize_free srk (mk_and srk [phi; pre']) in
+          let phi = eliminate_arr_eq srk phi in
+          let phi = over_approx_arrays phi in
+          (* TODO: fix pre... not over correct vars *)
+          let exists sym = List.mem sym conc_vars in
+          let post' = Abs.abstract ~exists (module D) phi in
           if D.equal (D.join post' post) post then None else Some (D.join post' post)
       in
       let init v =
@@ -341,7 +330,7 @@ module Make
           D.bottom
       in
       let entry = start_vert in
-      WG.forward_analysis wg ~entry ~update ~init
+      WG.forward_analysis wg ~entry ~update ~init, sym_to_ind
 
     let linchc_to_weighted_graph fp pd =
       let open WeightedGraph in
@@ -395,16 +384,26 @@ module Make
           fp.queries
           wg
       in
-      let _inv = annotate_wg (module Abs.Sign) wg in
-      WG.iter_vertex (fun vertex ->
-          Log.errorf "vertex %n has post %a" vertex (Formula.pp srk) (Abs.Sign.formula_of (_inv vertex))) wg;
-      (*WG.iter_succ_e (fun (v1, e, v2) ->
-          match e with
-          | One -> Log.errorf "Edge %n to %n is \n TRUE" v1 v2
-          | Zero -> Log.errorf "Edge %n to %n is \n False" v1 v2
-          | Edge (_, _, constr) -> Log.errorf "Edge %n to %n to \n" v1 v2)
-        wg
-        start_vert;*)
+      let _inv, _sym_to_var = annotate_wg (module Abs.Sign) wg in
+      (*let wg = 
+        WG.map_weights (fun v1 w _ ->
+            match w with
+            | One -> One
+            | Zero -> Zero
+            | Edge (p_conc, p_hypo, constr) ->
+              let annotation = Abs.Sign.formula_of (inv v1) in
+              let num_conc = List.length p_conc in
+              let annotation_var = 
+                substitute_const 
+                  srk
+                  (fun sym ->
+                     let (ind, typ) = Hashtbl.find sym_to_var sym in
+                     mk_var srk (ind + num_conc) typ)
+                  annotation
+              in
+              Edge (p_conc, p_hypo, mk_and srk [constr; annotation_var]))
+          wg
+      in*)
       wg
 
     let stratify fp =
