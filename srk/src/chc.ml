@@ -4,6 +4,7 @@ open Syntax
 module DynArray = BatDynArray
 module D = Graph.Pack.Digraph
 module WG = WeightedGraph
+module PE = Pathexpr
 
 
 let time _ =
@@ -132,21 +133,75 @@ module Make
     let get_rules fp = fp.rules
 
     type 'a edge = One | Zero | Edge of (string * typ_fo) list * (string * typ_fo) list * 'a formula
-    let zero = Zero 
-    let one = One 
-
     let goal_vert = -2 
     let start_vert = -1
-    let add x y =
+    
+    let rec edge pd table soln weights src dst =
+      let rules = Hashtbl.find weights (src, dst) in
+      let constrs' = 
+        List.map (fun (conc, hypo_props, constr) ->
+            let constr', _ = 
+              List.fold_left (fun (constr, param_counter) prop -> 
+                let num_params = List.length (Proposition.typ_of_params prop) in
+                if (int_of_symbol prop.symbol) = src then (
+                  constr, param_counter + num_params)
+                else (
+                  let soln_expr = Hashtbl.find soln (int_of_symbol prop.symbol) in
+                  let algebra = path_algebra pd table soln weights in
+                  let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
+                  let soln_constr = 
+                    match soln_edge with
+                    | One -> mk_true srk
+                    | Zero -> mk_false srk
+                    | Edge (_, _, constr) -> constr 
+                  in
+                  let constr = 
+                    substitute
+                      srk
+                      (fun (ind, typ) ->
+                         if ind < param_counter
+                         then mk_var srk (ind + num_params) typ
+                         else if ind >= param_counter && ind < param_counter + num_params
+                         then mk_var srk (ind - param_counter) typ
+                         else mk_var srk ind typ)
+                      constr
+                  in
+                  let constr = mk_and srk [soln_constr; constr] in
+                  let qs = BatList.combine prop.names (Proposition.typ_of_params prop) in
+                  let constr =
+                    BatList.fold_left (fun constr (name, typ) ->
+                        mk_exists srk ~name typ constr)
+                      constr
+                      qs
+                  in
+                  constr, param_counter))
+                (constr, List.length (Proposition.typ_of_params conc))
+                hypo_props
+            in
+            constr')
+          rules
+      in
+      let (conc, hypo_props, _) = List.hd rules in
+      let src_fvs =
+        if src = start_vert then []
+        else (
+          let hypo = BatList.find (fun prop -> (int_of_symbol prop.symbol) = src) hypo_props in
+          BatList.combine hypo.names (Proposition.typ_of_params hypo))
+      in
+      (Edge (BatList.combine conc.names (Proposition.typ_of_params conc),
+             src_fvs,
+             mk_or srk constrs'))
+    
+    and add x y =
       match x, y with
       | One, _
-      | _, One -> One
+      | _, One -> assert (1 = 2); Zero
       | Zero, e -> e
       | e, Zero -> e
       | Edge (fvc, fvh, phix), Edge (_, _, phiy) -> 
         Edge (fvc, fvh, mk_or srk [phix; phiy])
 
-    let mul index x y =
+    and mul x y =
       match x, y with
       | One, e -> e
       | e, One -> e
@@ -186,13 +241,12 @@ module Make
         let _ = time "exists" in
         (*diff tsub2 t_closure "closure";*)
         let phi'' = Quantifier.eq_guided_qe srk phi' in
-        index := !index + 1;
         let t2 = time "Mul done" in
         (*diff t_closure t2 "eq guided";*)
         diff t1 t2 "Mul";
         Edge (p_cy, p_hx, phi'')
 
-    let star pd x =
+    and star pd x =
       match x with
       | Zero -> Zero
       | One -> One
@@ -255,6 +309,13 @@ module Make
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         Edge (p_c, p_h, phi') 
 
+    and path_algebra pd table soln weights = function 
+      | `Edge (src, dst) -> edge pd table soln weights src dst
+      | `Mul (edge1, edge2) -> mul edge1 edge2
+      | `Add (edge1, edge2) -> add edge1 edge2
+      | `Star (edge) -> star pd edge
+      | `Zero -> Zero
+      | `One -> One
 
     let over_approx_arrays phi =
       let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
@@ -281,7 +342,7 @@ module Make
     module Abs = Abstract.MakeAbstractRSY(C)
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
-    let annotate_wg (type a) (module D : Absd with type t = a) wg = 
+    let _annotate_wg (type a) (module D : Absd with type t = a) wg = 
       let sym_to_ind = Hashtbl.create 97 in
       let conc_vars = Memo.memo (fun (ind, typ) -> 
           let s = mk_symbol srk (typ :> typ) in
@@ -318,7 +379,12 @@ module Make
               (D.formula_of pre)
           in
           Log.errorf "ANNOTATION IS %a" (Formula.pp srk) pre';
-          let phi = Formula.skolemize_free srk (mk_and srk [phi; pre']) in
+          let skolem_vars = Memo.memo (fun (_, typ) ->
+              let s = mk_symbol srk (typ :> typ) in
+              mk_const srk s)
+          in
+          let phi = substitute srk (fun (ind, typ) -> skolem_vars (ind, typ)) (mk_and srk [phi; pre']) in
+
           let phi = eliminate_arr_eq srk phi in
           let phi = over_approx_arrays phi in
           Log.errorf "Now phi is %a" (Formula.pp srk) phi;
@@ -337,99 +403,6 @@ module Make
       in
       let entry = start_vert in
       WG.forward_analysis wg ~entry ~update ~init, sym_to_ind
-
-    let linchc_to_weighted_graph fp pd =
-      let open WeightedGraph in
-      let index = ref 0 in
-      (* The edges of the graph are of the form 
-       * [(conc params, hypo params, constr)]*) 
-      let alg = {mul=mul index; add=add; star=star pd; zero; one} in
-      let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
-      let wg = WeightedGraph.add_vertex wg goal_vert in
-      let prop_symbols =
-        BatList.fold_left (fun props (conc, hypo, _) ->
-            BatList.fold_left (fun props prop ->
-                Symbol.Set.add prop.symbol props)
-              props
-              (conc ::hypo))
-          fp.queries
-          fp.rules
-      in
-      let wg = 
-        Symbol.Set.fold (fun prop_sym wg -> 
-            WeightedGraph.add_vertex wg (int_of_symbol prop_sym))
-          prop_symbols
-          wg
-      in
-      let wg  = 
-        List.fold_left
-          (fun wg (conc, hypo_props, constr) ->
-             match hypo_props with
-             | [] ->
-               WeightedGraph.add_edge 
-                 wg 
-                 start_vert
-                 (Edge (BatList.combine conc.names (Proposition.typ_of_params conc), [], constr))
-                 (int_of_symbol conc.symbol)
-             | [hd] -> 
-               WeightedGraph.add_edge 
-                 wg
-                 (int_of_symbol hd.symbol)
-                 (Edge (BatList.combine conc.names (Proposition.typ_of_params conc),
-                        BatList.combine hd.names (Proposition.typ_of_params hd),
-                        constr))
-                 (int_of_symbol conc.symbol)
-             | _ -> failwith "CHC is non-linear")
-          wg
-          fp.rules
-      in
-      (*TODO: probably shouldn't be alg.one *)
-      let wg =
-        Symbol.Set.fold (fun sym wg ->
-            WeightedGraph.add_edge wg (int_of_symbol sym) alg.one goal_vert)
-          fp.queries
-          wg
-      in
-      let inv, sym_to_var = annotate_wg (module Abs.Sign) wg in
-      Log.errorf "ALL VERTICES";
-      WG.iter_vertex (fun v -> Log.errorf "Post of %n is %a" v (Formula.pp srk) (Abs.Sign.formula_of (inv v))) wg;
-      Log.errorf "NEXT";
-      let wg = WG.map_weights (fun _ w _ ->
-          match w with
-          | One -> One
-          | Zero -> Zero
-          | Edge (p_conc, p_hypo, constr) ->
-            Log.errorf "OG CONSTR IS %a" (Formula.pp srk) constr;
-            let constr' = Formula.skolemize_free srk constr in
-            begin match Smt.is_sat srk constr' with
-              | `Sat -> Edge (p_conc, p_hypo, constr)
-              | `Unsat -> Edge (p_conc, p_hypo, mk_false srk)
-              | `Unknown -> assert false
-            end;
-        )
-        wg
-      in
-      let wg = 
-        WG.map_weights (fun v1 w _ ->
-            match w with
-            | One -> One
-            | Zero -> Zero
-            | Edge (p_conc, p_hypo, constr) ->
-              let annotation = Abs.Sign.formula_of (inv v1) in
-              let num_conc = List.length p_conc in
-              let annotation_var = 
-                substitute_const 
-                  srk
-                  (fun sym ->
-                     let (ind, typ) = Hashtbl.find sym_to_var sym in
-                     mk_var srk (ind + num_conc) typ)
-                  annotation
-              in
-              (*assert (annotation_var != mk_false srk);*)
-              Edge (p_conc, p_hypo, mk_and srk [constr; annotation_var]))
-          wg
-      in
-      wg
 
     let stratify fp =
       (* Initialize graph: One vertex for each rel symbol.
@@ -500,9 +473,19 @@ module Make
       in
       if is_strat then Some (List.rev ordering) else None
 
-
-    let solve_super_lin fp pd ordering =
+    let solve_super_lin fp ordering =
+      let open WeightedGraph in
       let solution = Hashtbl.create 97 in
+      let edge_weights = Hashtbl.create 97 in
+      let ctx = PE.mk_context () in
+      let alg = 
+        {mul=PE.mk_mul ctx; 
+         add=PE.mk_add ctx; 
+         star=PE.mk_star ctx; 
+         zero=PE.mk_zero ctx; 
+         one=PE.mk_one ctx} 
+      in
+ 
       (* We compute a topologoical sort on the collapsed graph and solve
        * for the relations in order.*)
       List.iter (fun rels ->
@@ -512,67 +495,75 @@ module Make
               fp.rules
           in
           (* Substitute in the solutions for rels calculated at previous strata *)
-          let ruleset' = List.map (fun (conc, hypo_props, constr) ->
-              let hypo_atoms', constr', _ = 
-                List.fold_left (fun (hypo_atoms, constr, param_counter) prop -> 
-                    let num_params = List.length (Proposition.typ_of_params prop) in
-                    if Hashtbl.mem solution (int_of_symbol prop.symbol) then (
-                      let soln = Hashtbl.find solution (int_of_symbol prop.symbol) in
-                      let constr = 
-                        substitute
-                          srk
-                          (fun (ind, typ) ->
-                             if ind < param_counter
-                             then mk_var srk (ind + num_params) typ
-                             else if ind >= param_counter && ind < param_counter + num_params
-                             then mk_var srk (ind - param_counter) typ
-                             else mk_var srk ind typ)
-                          constr
-                      in
-                      let constr = mk_and srk [soln; constr] in
-                      let qs = BatList.combine prop.names (Proposition.typ_of_params prop) in
-                      let constr =
-                        BatList.fold_left (fun constr (name, typ) ->
-                            mk_exists srk ~name typ constr)
-                          constr
-                          qs
-                      in
-                      hypo_atoms, constr, param_counter)
-                    else (prop :: hypo_atoms, constr, param_counter + num_params))
-                  ([], constr, List.length (Proposition.typ_of_params conc))
-                  hypo_props
+          let edges = List.filter_map (fun (conc, hypo_props, constr) ->
+              let conc_int = int_of_symbol (Proposition.symbol_of conc) in
+              let unsolved = 
+                match BatList.filter (fun prop -> 
+                    not (Hashtbl.mem solution (int_of_symbol (Proposition.symbol_of prop))) )
+                      hypo_props with
+                | [] -> start_vert
+                | [hd] -> (int_of_symbol (Proposition.symbol_of hd))
+                | _ -> failwith "CHC is non-linear"
               in
-              conc, List.rev hypo_atoms', constr')
+              let edge = (unsolved, conc_int) in
+              match BatHashtbl.find_option edge_weights edge with
+              | Some weights ->
+                BatHashtbl.replace edge_weights edge ((conc, hypo_props, constr) :: weights);
+                None
+              | None -> 
+                BatHashtbl.add edge_weights edge [(conc, hypo_props, constr)];
+                Some edge)
               ruleset
           in
-          let sub_fp = {rules=ruleset'; queries=Symbol.Set.empty} in
-          let wg = linchc_to_weighted_graph sub_fp pd in
-          let sub_soln = 
-            (fun rel -> 
-               match WG.path_weight wg start_vert rel with
-               | One -> mk_true srk
-               | Zero -> mk_false srk
-               | Edge (_, _, phi) -> phi) 
+          let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
+          let wg = WeightedGraph.add_vertex wg goal_vert in
+          let wg = 
+            Symbol.Set.fold (fun prop_sym wg -> 
+                WeightedGraph.add_vertex wg (int_of_symbol prop_sym))
+              (prop_symbols fp)
+              wg
           in
-          Symbol.Set.iter 
-            (fun rel -> Hashtbl.add solution (int_of_symbol rel) (sub_soln (int_of_symbol rel))) 
+          let wg = List.fold_left (fun wg (src, dst) ->
+              WG.add_edge
+                wg
+                src
+                (PE.mk_edge ctx src dst)
+                dst)
+              wg
+              edges
+          in
+          Symbol.Set.iter
+            (fun rel -> 
+               Hashtbl.add 
+                 solution 
+                 (int_of_symbol rel) 
+                 (WG.path_weight wg start_vert (int_of_symbol rel))) 
             rels)
         ordering;
       let goal = 
-        mk_or 
-          srk 
-          (List.map (fun rel -> (Hashtbl.find solution (int_of_symbol rel))) (Symbol.Set.to_list fp.queries))
+        (List.map (fun rel -> (Hashtbl.find solution (int_of_symbol rel))) (Symbol.Set.to_list fp.queries))
       in
-      Hashtbl.add solution goal_vert goal;  
-      Hashtbl.find solution
+      solution, edge_weights, goal
+
+    (*let eval ?(table=PE.mk_table ()) solution edge_weights =*)
+
 
 
     let query_vc_condition fp pd =
       match stratify fp with
       | None -> failwith "No methods for solving non super linear chc systems"
       | Some ordering ->
-        let res = solve_super_lin fp pd ordering in
-        res goal_vert   
+        let soln, weights, goal = solve_super_lin fp ordering in
+        let table = PE.mk_table () in
+        let algebra = path_algebra pd table soln weights in
+        let constrs = List.map (fun pathexpr -> 
+            match PE.eval ~table ~algebra pathexpr with
+            | One -> mk_true srk
+            | Zero -> mk_false srk
+            | Edge (_, _, constr) -> constr)
+            goal 
+        in
+        mk_or srk constrs
 
     let check fp pd =
       let phi = query_vc_condition fp pd in
@@ -581,10 +572,10 @@ module Make
       | `Unknown -> `Unknown
       | `Sat -> `Unknown
 
-    let solve fp pd =
+    let solve fp _pd =
       match stratify fp with
       | None -> failwith "No methods for solving non lin fp"
-      | Some ordering -> solve_super_lin fp pd ordering
+      | Some _ordering -> (*solve_super_lin fp ordering*) assert false
 
   end
 
