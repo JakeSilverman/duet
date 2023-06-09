@@ -132,10 +132,17 @@ module Make
 
     let get_rules fp = fp.rules
 
-    type 'a edge = One | Zero | Edge of (string * typ_fo) list * (string * typ_fo) list * 'a formula
+    type 'a edge = Edge of (string * typ_fo) list * (string * typ_fo) list * 'a formula
+    (*type 'a omega_edge = OEdge of (string * typ_fo) list * 'a formula*)
     let goal_vert = -2 
     let start_vert = -1
-    
+   
+
+    module AD = Pmfa.OldPmfa.Array_analysis (Iteration.Product(Iteration.LossyTranslation)(Iteration.PolyhedronGuard))
+          (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
+
+
+
     let rec edge pd table soln weights src dst =
       let rules = Hashtbl.find weights (src, dst) in
       let constrs' = 
@@ -151,8 +158,6 @@ module Make
                   let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
                   let soln_constr = 
                     match soln_edge with
-                    | One -> mk_true srk
-                    | Zero -> mk_false srk
                     | Edge (_, _, constr) -> constr 
                   in
                   let constr = 
@@ -194,19 +199,11 @@ module Make
     
     and add x y =
       match x, y with
-      | One, _
-      | _, One -> assert (1 = 2); Zero
-      | Zero, e -> e
-      | e, Zero -> e
       | Edge (fvc, fvh, phix), Edge (_, _, phiy) -> 
         Edge (fvc, fvh, mk_or srk [phix; phiy])
 
     and mul x y =
       match x, y with
-      | One, e -> e
-      | e, One -> e
-      | Zero, _
-      | _, Zero -> Zero
       | Edge (_, p_hx, phix), Edge (p_cy, p_hy, phiy) ->
         let t1 = time "Mul entered" in
         let num_p_cy, num_p_hy = List.length p_cy, List.length p_hy in
@@ -248,8 +245,6 @@ module Make
 
     and star pd x =
       match x with
-      | Zero -> Zero
-      | One -> One
       | Edge (p_c, p_h, phi) ->
         let t1 = time "Star Enter" in
 
@@ -314,9 +309,87 @@ module Make
       | `Mul (edge1, edge2) -> mul edge1 edge2
       | `Add (edge1, edge2) -> add edge1 edge2
       | `Star (edge) -> star pd edge
-      | `Zero -> Zero
-      | `One -> One
+      | `Zero -> assert false
+      | `One -> assert false
+(*
+    let omega edge =
+      match edge with
+      | Edge (p_c, p_h, phi) ->
+        let t1 = time "Omega Star Enter" in
 
+        let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
+        let var_to_sym = Hashtbl.create 97 in
+        let num_trs = List.length p_c in
+        let trs = 
+          BatList.map2i (fun ind (name1, typ1) (name2, typ2) ->
+              let s1 = mk_symbol srk ~name:name1 (typ1 :> typ) in
+              let s2 = mk_symbol srk ~name:(name2) (typ2 :> typ) in
+              Hashtbl.add var_to_sym s1 (num_trs + ind);
+              Hashtbl.add var_to_sym s2 ind;
+              s1, s2)
+            p_h
+            p_c
+        in
+        let phi =
+          substitute
+            srk
+            (fun (ind, _) ->
+               if ind < List.length p_c
+               then mk_const srk (snd (List.nth trs ind))
+               else mk_const srk (fst (List.nth trs (ind - List.length p_c))))
+            phi
+        in
+        let tf = TransitionFormula.make ~exists phi trs in
+
+        let mpped = AD.mp srk tf in
+        
+        let phi' =
+          substitute_sym 
+            srk
+            (fun sym ->
+               match BatHashtbl.find_option var_to_sym sym with
+               | Some i -> mk_var srk i (typ_symbol_fo sym)
+               | None -> mk_const srk sym)
+            mpped
+        in
+        let phi' =
+          Quantifier.eq_guided_qe 
+            srk
+            (Quantifier.miniscope srk phi')
+        in
+        OEdge (p_c, phi') 
+*)
+
+(*
+    let preimage transition formula =
+      let open Syntax in
+      let transition = K.linearize transition in
+      let fresh_skolem =
+        Memo.memo (fun sym ->
+            let name = show_symbol srk sym in
+            let typ = typ_symbol srk sym in
+            mk_const srk (mk_symbol srk ~name typ))
+      in
+      let subst sym =
+        match V.of_symbol sym with
+        | Some var ->
+          if K.mem_transform var transition then
+            K.get_transform var transition
+          else
+            mk_const srk sym
+        | None -> fresh_skolem sym
+      in
+      mk_and srk [SrkSimplify.eliminate_floor srk (K.guard transition);
+                  substitute_const srk subst formula]
+
+*)
+
+    (*let omega_mul tf s = assert false
+    let omega_add s1 s2 =
+      match s1, s2 with
+      | OEdge (v1, phi1), OEdge (v2, phi2) ->
+        OEdge (v1, mk_or srk [phi1; phi2])
+*)
     let over_approx_arrays phi =
       let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
       let bools = Memo.memo (fun _ -> mk_symbol srk `TyBool) in
@@ -351,8 +424,6 @@ module Make
       in
       let update ~pre edge ~post =
         match edge with
-        | One -> if D.equal post D.top then None else Some D.top
-        | Zero -> None
         | Edge (p_conc, p_hypo, phi) ->
           List.iter (fun (name, _) -> Log.errorf "Name is %s" name) (p_conc @ p_hypo);
           let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
@@ -558,8 +629,6 @@ module Make
         let algebra = path_algebra pd table soln weights in
         let constrs = List.map (fun pathexpr -> 
             match PE.eval ~table ~algebra pathexpr with
-            | One -> mk_true srk
-            | Zero -> mk_false srk
             | Edge (_, _, constr) -> constr)
             goal 
         in
