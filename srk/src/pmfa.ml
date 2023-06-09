@@ -1180,6 +1180,137 @@ module OldPmfa = struct
 
     let pp _ _ _= failwith "todo 10"
 
+    module TLLRF = TerminationLLRF
+    module TDTA = TerminationDTA
+
+    let termination_exp = ref true
+    let termination_llrf = ref true
+    let termination_dta = ref true
+    let termination_attractor = ref true
+
+
+    (* Attractor region analysis *)
+    let attractor_regions srk tf =
+      let open Syntax in
+      let formula = T.formula tf in
+      let attractors =
+        BatList.fold_left (fun xs (x, x') ->
+            let (x, x') = mk_const srk x, mk_const srk x' in
+            let lo =
+              let nonincreasing = mk_and srk [formula; mk_leq srk x' x] in
+              match SrkZ3.optimize_box srk (mk_and srk [formula; nonincreasing]) [x'] with
+              | `Sat [ivl] ->
+                (match Interval.lower ivl with
+                 | Some lo -> [mk_leq srk (mk_real srk lo) x]
+                 | None -> [])
+              | _ -> []
+            in
+            let hi =
+              let nondecreasing = mk_and srk [formula; mk_leq srk x x'] in
+              match SrkZ3.optimize_box srk (mk_and srk [formula; nondecreasing]) [x'] with
+              | `Sat [ivl] ->
+                (match Interval.upper ivl with
+                 | Some hi -> [mk_leq srk x (mk_real srk hi)]
+                 | None -> [])
+              | _ -> []
+            in
+            (lo@hi@xs))
+          []
+          (T.symbols tf)
+      in
+      T.map_formula (fun _ -> mk_and srk (formula::attractors)) tf
+
+
+
+    let mp srk tf =
+
+      let sym_to_var = Hashtbl.create 991 in
+
+      let of_symbol sym =
+        if Hashtbl.mem sym_to_var sym then
+          Some (Hashtbl.find sym_to_var sym)
+        else
+          None
+      in
+      let abs = abstract srk tf in
+      let exists s = not (Symbol.Set.mem s abs.skolems) in
+      let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in 
+      let mp_lia = 
+        (** over-approximate possibly non-terminating conditions for a transition *)
+        begin
+          let open Syntax in
+          let nonterm tf =
+            let pre =
+              let fresh_skolem =
+                Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+              in
+              let subst sym =
+                match of_symbol sym with
+                | Some _ -> mk_const srk sym
+                | None -> fresh_skolem sym
+              in
+              substitute_const srk subst (T.formula tf)
+            in
+            let llrf, has_llrf =
+              if !termination_llrf then
+                if TLLRF.has_llrf srk tf then
+                  [Syntax.mk_false srk], true
+                else if !termination_attractor
+                     && TLLRF.has_llrf srk (attractor_regions srk tf) then
+                  [Syntax.mk_false srk], true
+                else
+                  [pre], false
+              else
+                (* If LLRF is disabled, default to pre *)
+                [pre], false
+            in
+            Log.errorf "was success? %b" has_llrf;
+            let dta =
+              (* If LLRF succeeds, then we do not try dta *)
+              if (not has_llrf) && !termination_dta then
+                [mk_not srk (TDTA.mp srk tf)]
+              else []
+            in
+            let exp =
+              if (not has_llrf) && !termination_exp then
+                let mp =
+                  Syntax.mk_not srk
+                    (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
+                in
+                let dta_entails_mp =
+                  (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
+                  Syntax.mk_forall_consts
+                    srk
+                    (fun _ -> false)
+                    (Syntax.mk_if srk (mk_and srk dta) mp)
+                in
+                match Quantifier.simsat srk dta_entails_mp with
+                | `Sat -> []
+                | _ -> [mp]
+              else []
+            in
+            let result =
+              Syntax.mk_and srk (llrf@dta@exp)
+            in
+            match Quantifier.simsat srk result with
+            | `Unsat -> mk_false srk
+            | _ -> result
+          in
+          nonterm tf_iter
+        end
+      in
+      Log.errorf "Formula here is %a" (Formula.pp srk) mp_lia;
+      let map sym =  
+        if sym = abs.proj_ind
+        then mk_var srk 0 `TyInt
+        else if Hashtbl.mem abs.arr_map sym 
+        then mk_select srk (mk_const srk (Hashtbl.find abs.arr_map sym)) 
+            (mk_var srk 0 `TyInt) 
+        else mk_const srk sym
+      in
+      let substed = substitute_const srk map mp_lia in
+      let res = (mk_forall srk `TyInt substed) in
+      res
 
 
 

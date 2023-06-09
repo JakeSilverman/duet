@@ -26,5 +26,6 @@ module OldPmfa : sig
 
   module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) : sig
     include PreDomain
+    val mp : 'a context -> 'a T.t -> 'a formula
   end
 end
