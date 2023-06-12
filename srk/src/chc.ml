@@ -153,7 +153,7 @@ module Make
                 if (int_of_symbol prop.symbol) = src then (
                   constr, param_counter + num_params)
                 else (
-                  let soln_expr = Hashtbl.find soln (int_of_symbol prop.symbol) in
+                  let soln_expr = soln (prop.symbol) in
                   let algebra = path_algebra pd table soln weights in
                   let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
                   let soln_constr = 
@@ -544,9 +544,18 @@ module Make
       in
       if is_strat then Some (List.rev ordering) else None
 
-    let solve_super_lin fp ordering =
+    (* This function converts each stratum of a super-linear CHC to a weighted
+     * graph and then computes a path expression that over-approximates the 
+     * fp of each relation. Additionally, an omega-path expression is
+     * computed for each relation.
+     * The ordering is a list of set of relations. The first element of the list
+     * is the first stratum of the super-linear CHC and so on. This list
+     * can be obtained by invoking the stratify function.*)
+    let get_path_and_omega_path_expr fp ordering  =
       let open WeightedGraph in
-      let solution = Hashtbl.create 97 in
+      let open Proposition in
+      let path_soln = Hashtbl.create 97 in
+      let omega_soln = Hashtbl.create 97 in
       let edge_weights = Hashtbl.create 97 in
       let ctx = PE.mk_context () in
       let alg = 
@@ -556,24 +565,32 @@ module Make
          zero=PE.mk_zero ctx; 
          one=PE.mk_one ctx} 
       in
- 
-      (* We compute a topologoical sort on the collapsed graph and solve
-       * for the relations in order.*)
+      let omega_alg =
+        {omega=PE.mk_omega ctx;
+         omega_add=PE.mk_omega_add ctx;
+         omega_mul=PE.mk_omega_mul ctx;
+        }
+      in
+
+      (* Iterate over each stratum and collect the solutions *)
       List.iter (fun rels ->
           let ruleset = 
             List.filter (fun (conc, _, _) ->
                 Symbol.Set.mem conc.symbol rels)
               fp.rules
           in
-          (* Substitute in the solutions for rels calculated at previous strata *)
+          (* Determine the edges of this stratum. Each rule should have at most
+           * a single unsolved relation in the hypothesis (where rules belonging
+           * to previous stratum are considered solved). This relation is the 
+           * src vertex; where there is no unsolved relation in the hypothesis 
+           * the start vertex is used instead as src *)
           let edges = List.filter_map (fun (conc, hypo_props, constr) ->
-              let conc_int = int_of_symbol (Proposition.symbol_of conc) in
+              let conc_int = int_of_symbol (symbol_of conc) in
+              let solved prop = Hashtbl.mem path_soln (symbol_of prop) in
               let unsolved = 
-                match BatList.filter (fun prop -> 
-                    not (Hashtbl.mem solution (int_of_symbol (Proposition.symbol_of prop))) )
-                      hypo_props with
+                match BatList.filter (fun prop -> not (solved prop)) hypo_props with
                 | [] -> start_vert
-                | [hd] -> (int_of_symbol (Proposition.symbol_of hd))
+                | [hd] -> (int_of_symbol (symbol_of hd))
                 | _ -> failwith "CHC is non-linear"
               in
               let edge = (unsolved, conc_int) in
@@ -603,30 +620,37 @@ module Make
               wg
               edges
           in
+          let thunked_path rel = 
+            fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
+          in
+          let thunked_omega = 
+            fun () -> (WG.omega_path_weight wg omega_alg start_vert) 
+          in 
           Symbol.Set.iter
             (fun rel -> 
-               Hashtbl.add 
-                 solution 
-                 (int_of_symbol rel) 
-                 (WG.path_weight wg start_vert (int_of_symbol rel))) 
+               Hashtbl.add path_soln rel (thunked_path rel)) 
+            rels;
+          Symbol.Set.iter
+            (fun rel -> 
+               Hashtbl.add omega_soln rel thunked_omega) 
             rels)
         ordering;
-      let goal = 
-        (List.map (fun rel -> (Hashtbl.find solution (int_of_symbol rel))) (Symbol.Set.to_list fp.queries))
-      in
-      solution, edge_weights, goal
+      path_soln, omega_soln, edge_weights
 
-    (*let eval ?(table=PE.mk_table ()) solution edge_weights =*)
 
 
 
     let query_vc_condition fp pd =
       match stratify fp with
-      | None -> failwith "No methods for solving non super linear chc systems"
+      | None -> failwith "No implementation for solving non super linear chc systems"
       | Some ordering ->
-        let soln, weights, goal = solve_super_lin fp ordering in
+        let thunked_path_exprs, _, weights = get_path_and_omega_path_expr fp ordering in
+        let dethunked = Memo.memo (fun rel -> (Hashtbl.find thunked_path_exprs rel) ()) in
+        let goal = 
+          (List.map (fun rel -> dethunked rel) (Symbol.Set.to_list fp.queries))
+        in
         let table = PE.mk_table () in
-        let algebra = path_algebra pd table soln weights in
+        let algebra = path_algebra pd table dethunked weights in
         let constrs = List.map (fun pathexpr -> 
             match PE.eval ~table ~algebra pathexpr with
             | Edge (_, _, constr) -> constr)
@@ -640,10 +664,26 @@ module Make
       | `Unsat  -> `No
       | `Unknown -> `Unknown
       | `Sat -> `Unknown
+(*
+    let query_vc_terminates fp pd mp =
+      match stratify fp with
+      | None -> failwith "No implementation for solving non super linear chc systems"
+      | Some ordering ->
+        let soln, weights, goal = get_path_and_omega_path_expr fp ordering in
+        let table = PE.mk_table () in
+        let algebra = path_algebra pd table soln weights in
+        let constrs = List.map (fun pathexpr -> 
+            match PE.eval ~table ~algebra pathexpr with
+            | Edge (_, _, constr) -> constr)
+            goal 
+        in
+        mk_or srk constrs
+*)
+
 
     let solve fp _pd =
       match stratify fp with
-      | None -> failwith "No methods for solving non lin fp"
+      | None -> failwith "No implementation for solving non super linear chc systems"
       | Some _ordering -> (*solve_super_lin fp ordering*) assert false
 
   end
