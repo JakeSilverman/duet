@@ -142,48 +142,57 @@ module Make
           (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
 
 
+    
+    let substitute_rel (conc, hypo_props, constr) substs =
+      List.fold_left2 (fun (constr, param_counter) prop subst ->
+          let num_params = List.length (Proposition.typ_of_params prop) in
+          match subst with
+          | None -> constr, param_counter + num_params
+          | Some phi ->
+            let constr = 
+              substitute
+                srk
+                (fun (ind, typ) ->
+                   if ind < param_counter
+                   then mk_var srk (ind + num_params) typ
+                   else if ind >= param_counter && ind < param_counter + num_params
+                   then mk_var srk (ind - param_counter) typ
+                   else mk_var srk ind typ)
+                constr
+            in
+            let constr = mk_and srk [phi; constr] in
+            let qs = BatList.combine prop.names (Proposition.typ_of_params prop) in
+            let constr =
+              BatList.fold_left (fun constr (name, typ) ->
+                  mk_exists srk ~name typ constr)
+                constr
+                qs
+            in
+            constr, param_counter)
+        (constr, 0)
+        (conc :: hypo_props) 
+        substs
+    |> fst
+
+
 
     let rec edge pd table soln weights src dst =
       let rules = Hashtbl.find weights (src, dst) in
       let constrs' = 
         List.map (fun (conc, hypo_props, constr) ->
-            let constr', _ = 
-              List.fold_left (fun (constr, param_counter) prop -> 
-                let num_params = List.length (Proposition.typ_of_params prop) in
-                if (int_of_symbol prop.symbol) = src then (
-                  constr, param_counter + num_params)
-                else (
-                  let soln_expr = soln (prop.symbol) in
-                  let algebra = path_algebra pd table soln weights in
-                  let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
-                  let soln_constr = 
+              let substs = List.map (fun prop ->
+                  if (int_of_symbol prop.symbol) = src
+                  then None
+                  else (
+                    let soln_expr = soln (prop.symbol) in
+                    let algebra = path_algebra pd table soln weights in
+                    let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
                     match soln_edge with
-                    | Edge (_, _, constr) -> constr 
-                  in
-                  let constr = 
-                    substitute
-                      srk
-                      (fun (ind, typ) ->
-                         if ind < param_counter
-                         then mk_var srk (ind + num_params) typ
-                         else if ind >= param_counter && ind < param_counter + num_params
-                         then mk_var srk (ind - param_counter) typ
-                         else mk_var srk ind typ)
-                      constr
-                  in
-                  let constr = mk_and srk [soln_constr; constr] in
-                  let qs = BatList.combine prop.names (Proposition.typ_of_params prop) in
-                  let constr =
-                    BatList.fold_left (fun constr (name, typ) ->
-                        mk_exists srk ~name typ constr)
-                      constr
-                      qs
-                  in
-                  constr, param_counter))
-                (constr, List.length (Proposition.typ_of_params conc))
-                hypo_props
-            in
-            constr')
+                    | Edge (_, _, constr) -> Some constr))
+                  hypo_props
+              in
+              let substs = None :: substs in
+              substitute_rel (conc, hypo_props, constr) substs)
           rules
       in
       let (conc, hypo_props, _) = List.hd rules in
@@ -415,6 +424,79 @@ module Make
     module Abs = Abstract.MakeAbstractRSY(C)
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
+    let chc_forward_analysis (type a) (module D : Absd with type t = a) wg edge_weights invs = 
+      let sym_to_ind = Hashtbl.create 97 in
+      let conc_vars = Memo.memo (fun (ind, typ) -> 
+          let s = mk_symbol srk (typ :> typ) in
+          Hashtbl.add sym_to_ind s (ind, typ);
+          s) 
+      in
+      let update ~pre edge ~post =
+        match edge with
+        | `Edge (src, dst) ->
+          let weights = Hashtbl.find edge_weights (src, dst) in
+          let symbolified_constrs =
+            List.map (fun (conc, hypo_props, constr) ->
+                let substs = List.map (fun prop ->
+                    if (int_of_symbol prop.symbol) = src
+                    then 
+                      Some (
+                      substitute_const
+                        srk
+                        (fun sym ->
+                           if Hashtbl.mem sym_to_ind sym
+                           then (
+                             let (ind, typ) = Hashtbl.find sym_to_ind sym in
+                             mk_var srk ind typ)
+                           else mk_const srk sym)
+                        (D.formula_of pre))
+                    else Some (D.formula_of (invs (int_of_symbol prop.symbol))))
+                    hypo_props
+                in
+                let substs = None :: substs in
+                substitute_rel (conc, hypo_props, constr) substs)
+              weights
+          in
+          let p_conc = let (conc, _, _) = List.hd weights in BatList.combine conc.names (Proposition.typ_of_params conc) in
+          let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
+          let constr =
+            substitute
+              srk
+              (fun (ind, _) ->
+                 if ind < (List.length p_conc)
+                 then mk_const srk (List.nth conc_vars ind)
+                 else assert false)
+              (mk_or srk symbolified_constrs)
+          in
+
+          let phi = eliminate_arr_eq srk constr in
+          let phi = over_approx_arrays phi in
+          let exists sym = List.mem sym conc_vars in
+          let post' = Abs.abstract ~exists (module D) phi in
+          if D.equal (D.join post' post) post then None else Some (D.join post' post)
+        | _ -> assert false
+      in
+      let init v =
+        if v = start_vert then
+          D.top
+        else
+          D.bottom
+      in
+      let entry = start_vert in
+      let symbed_invs = WG.forward_analysis wg ~entry ~update ~init in
+      fun vertex ->
+        substitute_const 
+          srk
+          (fun sym ->
+             let (ind, typ) = Hashtbl.find sym_to_ind sym in
+             mk_var srk ind typ)
+          (D.formula_of (symbed_invs vertex))
+
+
+
+
+
+
     let _annotate_wg (type a) (module D : Absd with type t = a) wg = 
       let sym_to_ind = Hashtbl.create 97 in
       let conc_vars = Memo.memo (fun (ind, typ) -> 
@@ -557,6 +639,7 @@ module Make
       let path_soln = Hashtbl.create 97 in
       let omega_soln = Hashtbl.create 97 in
       let edge_weights = Hashtbl.create 97 in
+      let invs = Hashtbl.create 97 in
       let ctx = PE.mk_context () in
       let alg = 
         {mul=PE.mk_mul ctx; 
@@ -620,6 +703,13 @@ module Make
               wg
               edges
           in
+          if true then (
+            let stratum_invs = chc_forward_analysis (module Abs.Sign) wg weights invs in
+            WG.iter_vertex (fun v -> if v = start_vert || v = goal_vert then ()
+                             else Hashtbl.add invs v (stratum_invs v))
+              wg
+            )
+          else ();
           let thunked_path rel = 
             fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
           in
