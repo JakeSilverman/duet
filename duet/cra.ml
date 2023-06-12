@@ -1480,201 +1480,47 @@ module CHC = Chc.Make(Ctx)
 
 let array_analyze file =
 
-(*
-  let phi = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/arraysmttests/test.smt2" in
-  let lia = Pmfa.OldPmfa.unskolemize_int_arr srk phi in
-  let phi = Quantifier.miniscope srk lia in
-  Log.errorf "STARTED";
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/mini.smt2";
-
-  let phi = 
-    Quantifier.eq_guided_qe 
-      srk
-      phi
-  in
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/test_duet.smt2";
-  assert (1 = 2);
-*)
-
-(*let init = time "init" in*)
   let init = time () in
   let fp = CHC.ChcSrkZ3.parse_file file.filename in
   let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
-  (*let _ = determine_eq_ints_chc srk fp in*)
-  (*List.iter (fun (_, _, constr) ->
-      Pmfa.get_offset_cands srk constr)
-    (Chc.Fp.get_rules fp);
-*)
-  (*let classes = Pmfa.determine_offsets srk fp in
-  Hashtbl.iter (fun ke va ->
-      let va, names = BatUref.uget va in
-      Log.errorf "arr %s, %n belongs to class %s %n" (Syntax.show_symbol srk ke.rel) ke.param (Syntax.show_symbol srk va.rel) (va.param);
-      BatHashtbl.iter (fun rel params ->
-          BatSet.Int.iter (fun ele ->
-              Log.errorf "Offset for %s is %n" (Syntax.show_symbol srk rel) ele)
-        params)
-        names;
-    )
-    classes;*)
   let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
-
-  (*let inv = CHC.Fp.rel_invariants*) 
-  (*let _ = determine_offsets srk fp in*)
   let offsetdone = time () in
   diff init offsetdone "offset done";
-
-  
-    let phi = CHC.Fp.query_vc_condition fp ad in
-
-  
+  let phi = CHC.Fp.query_vc_condition fp ad in
   let phi = Syntax.eliminate_ite srk phi in
-  
-  (*let phi =
-    Quantifier.eq_guided_qe 
-      srk
-      (Quantifier.miniscope srk phi)
-  in*)
-
   let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
   let phi = Syntax.eliminate_ite srk phi in
-
-  (*let _, _, _, tf_proj, _ = Pmfa.OldPmfa.projection srk tf in*)
   let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
-
-
-
-  let lia = Syntax.Formula.prenex srk lia in
-
-
-  (*let lia = Quantifier.eq_guided_qe srk lia in*)
-
-  match CQuantifier.CoarseGrainStrategyImprovement.simsat srk lia with
+  match Quantifier.simsat srk lia with
   | `Unsat  -> 
     logf ~level:`always "Safe"
+  | `Unknown -> logf ~level:`always "UnknownREAL"
+  | `Sat -> 
+    logf ~level:`always "UnknownSAT"
 
+let array_analyze_term file =
+
+  let init = time () in
+  let fp = CHC.ChcSrkZ3.parse_file file.filename in
+  let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
+  let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
+  let offsetdone = time () in
+  diff init offsetdone "offset done";
+  let phi = CHC.Fp.query_vc_condition fp ad in
+  let phi = Syntax.eliminate_ite srk phi in
+  let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
+  let phi = Syntax.eliminate_ite srk phi in
+  let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
+  match Quantifier.simsat srk lia with
+  | `Unsat  -> 
+    logf ~level:`always "Safe"
   | `Unknown -> logf ~level:`always "UnknownREAL"
   | `Sat -> 
     logf ~level:`always "UnknownSAT"
 
 
-  (*let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-  let fp = Pmfa.elim_ite_chc srk fp in
- Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
-  let fp = Pmfa.prenex_chc srk fp in
- 
-  let fp = Pmfa.bool_factor_chc srk fp in
-  let fp = Pmfa.dumb_factor_chc srk fp in
-  let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-  let fp = Pmfa.prenex_chc srk fp in
- 
- let fp = Pmfa.bool_factor_chc srk fp in
-  let fp = Pmfa.dumb_factor_chc srk fp in
-  let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-  let fp = Pmfa.prenex_chc srk fp in
- 
-   let fp = Pmfa.bool_factor_chc srk fp in
-  let fp = Pmfa.dumb_factor_chc srk fp in
- let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-   let fp = Pmfa.collapse_juncts_chc srk fp in 
-  
-  let fp = Pmfa.eq_guided_qe srk fp in
-let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-  
-  let fp = Pmfa.prenex_chc srk fp in
- let fp = Pmfa.eq_guided_qe srk fp in
-let fp = Pmfa.eq_guided_bool_only_chc srk fp in
-  let fp = Pmfa.prenex_chc srk fp in
 
-  Log.errorf "\n\n\n\n\nNEW fp is %a" (Chc.Fp.pp srk) fp;
-  
-   let _ = Pmfa.check_q_array_chc srk fp in
- *)
 
- (*assert (1 = 2);
-
-  let fp = Pmfa.eq_guided_qe srk fp in
- Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
-  
-  let fp = Pmfa.prenex_chc srk fp in
-  Log.errorf "PRENEX IS OVER\n\n\n\n\n\n\n";
-  let fp = Pmfa.dumb_factor_chc srk fp in
-  let fp = Pmfa.dumb_factor_chc srk fp in
-  let fp = Pmfa.eq_guided_qe srk fp in
-  let fp = Pmfa.prenex_chc srk fp in
-  Log.errorf "PRENEX IS OVER\n\n\n\n\n\n\n";
-  let fp = Pmfa.collapse_juncts_chc srk fp in 
-  let fp = Pmfa.dumb_factor_chc srk fp in
-   let fp = Pmfa.eq_guided_qe srk fp in
-  let fp = Pmfa.prenex_chc srk fp in
-  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp;
-  let _ = Pmfa.check_q_array_chc srk fp in
-  let (*classes, rules_classes*) _ = Pmfa.pmfa_chc_offset_partitioning srk fp in*)
-  (*Log.errorf "offset";
-  let cands = Pmfa.propose_offset_candidates_seahorn srk fp classes in
-  Log.errorf "PROPOSED";
-
-  let rule_classes2 = Pmfa.derive_offset_for_each_rule srk fp cands in
-  Log.errorf "DERIVED";
-  let fp = Pmfa.apply_offset_candidates srk fp rules_classes rule_classes2 in
-  Log.errorf "APPLIED";
-  (*Log.errorf "applied and new is %a" (Chc.Fp.pp srk) fp;*)
-  Log.errorf "fp is %a" (Chc.Fp.pp srk) fp; 
-  let phi = Chc.Fp.query_vc_condition srk fp ad in
-  Log.errorf "VC FOUND";
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDINIT.smt2"; 
-  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
-  let phi = Syntax.eliminate_ite srk phi in
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDarray.smt2";
-  let vc_cond_time = time "vc_cond_time" in
-  diff init vc_cond_time "FIND VC COND ";
-  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
-  let trs = [] in
-  let tf = TransitionFormula.make phi trs in
-  Syntax.to_file srk phi "/Users/jakesilverman/Documents/duet/duet/VCCONDarrayelim.smt2";
-  let _, _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
-  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
-  Syntax.to_file srk lia "/Users/jakesilverman/Documents/duet/duet/VCCONDJEK.smt2";
-  (*let lia = Quantifier.eq_guided_qe srk lia in*)
-  Syntax.to_file srk lia "/Users/jakesilverman/Documents/duet/duet/MINISCOPEDVCCOND.smt2";
-  (*let lia = Syntax.mk_exists_consts srk (fun _ -> false) lia in
-  let qpf, phi = Quantifier.normalize srk lia in 
-  match Quantifier.winning_strategy srk qpf phi with
-  | `Unsat _  -> 
-    let final_time = time "final" in
-    diff vc_cond_time final_time "final time ";
-    logf ~level:`always "Safe"
-
-  | `Unknown -> logf ~level:`always "UnknownREAL"
-  | `Sat strat -> Log.errorf "strat is %a\n" (Quantifier.pp_strategy srk) strat; 
-    let final_time = time "final" in
-    diff vc_cond_time final_time "final time ";
-    logf ~level:`always "UnknownSAT"
- *)
-  
-  (*let normal = Cqt.FineGrainStrategyImprovement.normalize srk lia in 
-  match Cqt.FineGrainStrategyImprovement.winning_strategy srk normal with
-  | `Unsat _  -> 
-    let final_time = time "final" in
-    diff vc_cond_time final_time "final time ";
-    logf ~level:`always "Safe"
-
-  | `Unknown -> logf ~level:`always "UnknownREAL"
-  | `Sat strat -> Log.errorf "strat is %a\n" (Cqt.FineGrainStrategyImprovement.pp_strategy srk) strat; 
-    let final_time = time "final" in
-    diff vc_cond_time final_time "final time ";
-    logf ~level:`always "UnknownSAT"*)
-  match Quantifier.simsat srk lia with
-    | `Unsat  -> 
-      let final_time = time "final" in
-      diff vc_cond_time final_time "final time ";
-      logf ~level:`always "Safe"
-    
-    | `Unknown -> logf ~level:`always "UnknownREAL"
-    | `Sat -> 
-      let final_time = time "final" in
-      diff vc_cond_time final_time "final time ";
-      logf ~level:`always "UnknownSAT"
-*)
 let _ =
   CmdLine.register_pass
     ("-cra", analyze, " Compositional recurrence analysis");
@@ -1683,4 +1529,6 @@ let _ =
   CmdLine.register_pass
     ("-rba", resource_bound_analysis, " Resource bound analysis");
   CmdLine.register_pass
-    ("-array-cra", array_analyze, " Comp rec array content analysis")
+    ("-array-cra", array_analyze, " Comp rec array content analysis");
+  CmdLine.register_pass
+    ("-array-term", array_analyze_term, " Comp rec array content analysis")
