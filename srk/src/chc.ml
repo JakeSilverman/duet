@@ -432,7 +432,7 @@ module Make
           s) 
       in
       let update ~pre edge ~post =
-        match edge with
+        match (PE.open_pathexpr_edge_of edge) with
         | `Edge (src, dst) ->
           let weights = Hashtbl.find edge_weights (src, dst) in
           let symbolified_constrs =
@@ -450,7 +450,7 @@ module Make
                              mk_var srk ind typ)
                            else mk_const srk sym)
                         (D.formula_of pre))
-                    else Some (D.formula_of (invs (int_of_symbol prop.symbol))))
+                    else Some ((Hashtbl.find invs (int_of_symbol prop.symbol))))
                     hypo_props
                 in
                 let substs = None :: substs in
@@ -468,11 +468,12 @@ module Make
                  else assert false)
               (mk_or srk symbolified_constrs)
           in
-
+          Log.errorf "CONSTR IS %a" (Formula.pp srk) constr;
           let phi = eliminate_arr_eq srk constr in
           let phi = over_approx_arrays phi in
           let exists sym = List.mem sym conc_vars in
           let post' = Abs.abstract ~exists (module D) phi in
+          Log.errorf "POST IS %a" (Formula.pp srk) (D.formula_of post');
           if D.equal (D.join post' post) post then None else Some (D.join post' post)
         | _ -> assert false
       in
@@ -674,7 +675,8 @@ module Make
                 match BatList.filter (fun prop -> not (solved prop)) hypo_props with
                 | [] -> start_vert
                 | [hd] -> (int_of_symbol (symbol_of hd))
-                | _ -> failwith "CHC is non-linear"
+                | lst -> List.iter (fun hd -> Log.errorf "ele is %a" (pp_symbol srk) (symbol_of hd)) lst; 
+                  failwith "CHC is non-linear"
               in
               let edge = (unsolved, conc_int) in
               match BatHashtbl.find_option edge_weights edge with
@@ -688,10 +690,15 @@ module Make
           in
           let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
           let wg = WeightedGraph.add_vertex wg goal_vert in
+          let vertices =
+            List.map (fun (a, b) -> [a; b]) edges
+            |> List.flatten
+            |> BatSet.Int.of_list 
+          in
           let wg = 
-            Symbol.Set.fold (fun prop_sym wg -> 
-                WeightedGraph.add_vertex wg (int_of_symbol prop_sym))
-              (prop_symbols fp)
+            BatSet.Int.fold (fun v wg -> 
+                WeightedGraph.add_vertex wg v)
+              vertices
               wg
           in
           let wg = List.fold_left (fun wg (src, dst) ->
@@ -704,11 +711,12 @@ module Make
               edges
           in
           if true then (
-            let stratum_invs = chc_forward_analysis (module Abs.Sign) wg weights invs in
-            WG.iter_vertex (fun v -> if v = start_vert || v = goal_vert then ()
-                             else Hashtbl.add invs v (stratum_invs v))
-              wg
-            )
+            Log.errorf "COMPUTING INVS";
+            let stratum_invs = chc_forward_analysis (module Abs.Sign) wg edge_weights invs in
+            WG.iter_vertex (fun v ->
+                if v = start_vert || v = goal_vert then ()
+                             else (Hashtbl.add invs v (stratum_invs v)))
+              wg)
           else ();
           let thunked_path rel = 
             fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
@@ -734,6 +742,8 @@ module Make
       match stratify fp with
       | None -> failwith "No implementation for solving non super linear chc systems"
       | Some ordering ->
+        let ordering = List.fold_left Symbol.Set.union Symbol.Set.empty ordering in
+        let ordering = [ordering] in
         let thunked_path_exprs, _, weights = get_path_and_omega_path_expr fp ordering in
         let dethunked = Memo.memo (fun rel -> (Hashtbl.find thunked_path_exprs rel) ()) in
         let goal = 
@@ -1018,8 +1028,52 @@ module Make
           []
       in
       let fv_classes = List.map (fun uref -> BatUref.uget uref) fv_uclasses in
+      List.iter (fun fv_class -> Log.errorf "PRINTING CLASS";
+                BatSet.Int.iter (fun n -> Log.errorf "VAR IS %n" n) fv_class) fv_classes;
       fv_classes
 
+    (*
+    let determine_eq_int_fvs srk constr fvcands =
+      let syms_to_fvs = Hashtbl.create 97 in
+      let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+          let sym = mk_symbol srk ~name:"DET EQS" (typ :> typ) in
+          if BatSet.Int.mem ind fvcands 
+          then Hashtbl.add syms_to_fvs sym ind 
+          else ();
+          sym) 
+      in
+      let constr' = 
+        substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) constr 
+      in 
+      let cells_syms = 
+        BatHashtbl.fold (fun sym _ cells ->
+            let rec place_in_cell unchecked_cells =
+              match unchecked_cells with
+              | [] -> [Symbol.Set.singleton sym]
+              | hd :: tl ->
+                let rep = Symbol.Set.any hd in
+                let eq = (mk_eq srk (mk_const srk sym) (mk_const srk rep)) in  
+                begin match Smt.entails srk constr' eq with
+                  | `Yes -> (Symbol.Set.add sym hd) :: tl
+                  | `No -> hd :: (place_in_cell tl) 
+                  | `Unknown -> 
+                    failwith "determine_eq_int_fvs failure" 
+                end
+            in
+            place_in_cell cells)
+          syms_to_fvs
+          []
+      in
+      let cells_fvs = 
+        List.map (fun cell ->
+            List.map (fun s -> 
+                Hashtbl.find syms_to_fvs s) 
+              (Symbol.Set.elements cell)
+            |> BatSet.Int.of_list)
+          cells_syms
+      in
+      cells_fvs
+*)
 
     let iter_fvs f props =
       let _ = List.fold_left (fun fv_counter prop ->
@@ -1063,7 +1117,8 @@ module Make
           BatSet.Int.empty
       in
       let rule_clauses =
-        List.map (fun (conc, hypo, constr) -> 
+        List.map (fun (conc, hypo, constr) ->
+            Log.errorf "constr is %a" (Formula.pp srk) constr;
             let chcvar_of_fv = Hashtbl.create 97 in
             let congruent_fvs = 
               BatArray.make (List.length (Proposition.names_of conc)) [] 
@@ -1096,7 +1151,9 @@ module Make
             let unusables = List.flatten unusables in
             let make_edges (non_conc_fvs, conc_fvs) =
               List.fold_left (fun edges conc_fv ->
+                  Log.errorf "IN REL %a" (Formula.pp srk) (term_of conc_fv);
                   (List.map (fun non_conc_fv ->
+                       Log.errorf "NON COnc %a" (Formula.pp srk) (term_of non_conc_fv);
                        try mk_and srk [term_of conc_fv; term_of non_conc_fv] with
                        | _ -> mk_false srk) 
                       non_conc_fvs) @
@@ -1115,6 +1172,7 @@ module Make
                 srk
                 (List.map (fun fv -> (mk_not srk (term_of fv))) unusables)
             in
+            Log.errorf "phi is %a" (Formula.pp srk) edges_phi;
             mk_and srk [edges_phi; inconsist_clause]) 
           (Fp.get_rules fp)
       in
@@ -1518,11 +1576,13 @@ module Make
                   (BatSet.Int.mem ind full_painted))
                 fp
             in
+            Log.errorf "CHC here is %a" Fp.pp fp;
             let subchc_formula = 
               create_offset_formula subchc symb_rel_params offsetcands 
             in
-
+            List.iter (fun subchc -> Log.errorf "sub form is %a" (Formula.pp srk) subchc) subchc_formula;
             let offset_formula = mk_and srk subchc_formula in
+            Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
 
             let solver = Smt.mk_solver srk in
             Smt.Solver.add solver [offset_formula];
@@ -1568,47 +1628,7 @@ module Make
               Log.errorf "\n\n")
             offsetcands;
           assert ( 1 = 2);
-          ()
-          (*let subchc_formula = 
-            create_offset_formula srk subchc symb_rel_params offsetcands 
-            in
-
-            List.iter (fun f -> Log.errorf "One formula is %a" (Formula.pp srk) f) subchc_formula;
-            let offset_formula = mk_and srk subchc_formula in
-
-            let solver = Smt.mk_solver srk in
-            Smt.Solver.add solver [offset_formula];
-            match Smt.Solver.get_model solver with
-            | `Unsat 
-            | `Unknown -> 
-            Log.errorf "Offset formula is %a\n" (Formula.pp srk) offset_formula;
-            failwith "Cannot determine offsets"
-            | `Sat m ->
-            match Interpretation.select_implicant m offset_formula with
-            | None -> assert false
-            | Some imp ->
-              let offsets = BatHashtbl.create 97 in
-              List.iter (fun phi -> 
-                  begin match Formula.destruct srk phi with
-                    | `Atom (`Arith (`Eq, rel, param)) ->
-                      begin match ArithTerm.destruct srk rel, 
-                                  ArithTerm.destruct srk param with
-                      | `App (rel, []), `Real param ->
-                        Hashtbl.replace 
-                          offsets
-                          (Hashtbl.find srp_inv rel)
-                          (Option.get (QQ.to_int param))
-                      | _ -> assert false
-                      end
-                    | _ -> assert false
-                  end) 
-                imp; 
-              CVSet.iter (fun arr -> Hashtbl.add chcvar_to_cell arr cell_num)
-                arrs;
-              Symbol.Set.iter (fun sym -> Hashtbl.add sym_to_cell sym cell_num)
-                syms;
-              offsets)*)
-        )
+          ())
         local_offsets;
       cell_to_offset, chcvar_to_cell, sym_to_cell
 
