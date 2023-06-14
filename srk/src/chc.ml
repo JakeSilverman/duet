@@ -558,75 +558,6 @@ module Make
       let entry = start_vert in
       WG.forward_analysis wg ~entry ~update ~init, sym_to_ind
 
-    let stratify fp =
-      (* Initialize graph: One vertex for each rel symbol.
-       * There is an edge from rel a to rel b if a occurs in the
-       * hypothesis of some rule for which b occurs in the conclusion.
-       * A topological sort on the sccs of this graph will determine the
-       * ordering on which we need to solve the relations.*)
-      let prop_symbols =
-        BatList.fold_left (fun props (conc, hypo, _) ->
-            BatList.fold_left (fun props prop ->
-                Symbol.Set.add prop.symbol props)
-              props
-              (conc ::hypo))
-          fp.queries
-          fp.rules
-      in
-      let num_rels =  Symbol.Set.cardinal prop_symbols in
-      let verts = BatHashtbl.create 97 in
-      let inv_verts = BatHashtbl.create 97 in
-      Symbol.Set.iter (fun sym ->
-          let vert = D.V.create (int_of_symbol sym) in
-          BatHashtbl.add verts sym vert;
-          BatHashtbl.add inv_verts vert sym)
-        prop_symbols; 
-      let graph = D.create () in
-      BatHashtbl.iter (fun _ v -> D.add_vertex graph v) verts;
-      BatList.iter (fun (conc, hypo, _) ->
-          List.iter (fun h_prop ->
-              D.add_edge 
-                graph 
-                (BatHashtbl.find verts h_prop.symbol) 
-                (BatHashtbl.find verts conc.symbol))
-            hypo)
-        fp.rules;
-      (* We create a new graph in which each scc is collapsed to
-       * a single node and there is an edge from scc a to scc b
-       * iff scc b was reachable from scc a in the original graph*)
-      let sccs = D.Components.scc_list graph in
-      let solved = Hashtbl.create num_rels in
-      (* We compute a topologoical sort on the collapsed graph determine
-       * if the collapsed graph forms a stratified lin system of chcs.*)
-      let (ordering, is_strat) =
-        BatList.fold_left (fun (ordering, is_strat) verts ->
-            (* First we extract the sub-chc *)
-            let props = Symbol.Set.of_list (List.map (BatHashtbl.find inv_verts) verts) in
-            let ordering' = props :: ordering in
-            let ruleset = 
-              List.filter (fun (conc, _, _) -> 
-                  Symbol.Set.mem conc.symbol props)
-                fp.rules
-            in
-            let is_strat' = List.fold_left (fun acc (_, hypo_props, _) ->
-                if List.length (List.filter (fun prop ->
-                    not (Hashtbl.mem solved prop.symbol))
-                    hypo_props) > 1
-                then (false)
-                else true && acc)
-                is_strat
-                ruleset
-            in
-            Symbol.Set.iter 
-              (fun rel -> Hashtbl.add solved rel ()) 
-              props;
-            (ordering', is_strat')
-          )
-          ([], true)
-          (List.rev sccs)
-      in
-      if is_strat then Some (List.rev ordering) else None
-
     (* This function converts each stratum of a super-linear CHC to a weighted
      * graph and then computes a path expression that over-approximates the 
      * fp of each relation. Additionally, an omega-path expression is
@@ -634,11 +565,9 @@ module Make
      * The ordering is a list of set of relations. The first element of the list
      * is the first stratum of the super-linear CHC and so on. This list
      * can be obtained by invoking the stratify function.*)
-    let get_path_and_omega_path_expr fp ordering  =
+    let get_path_and_omega_path_expr fp =
       let open WeightedGraph in
       let open Proposition in
-      let path_soln = Hashtbl.create 97 in
-      let omega_soln = Hashtbl.create 97 in
       let edge_weights = Hashtbl.create 97 in
       let invs = Hashtbl.create 97 in
       let ctx = PE.mk_context () in
@@ -656,107 +585,84 @@ module Make
         }
       in
 
-      (* Iterate over each stratum and collect the solutions *)
-      List.iter (fun rels ->
-          let ruleset = 
-            List.filter (fun (conc, _, _) ->
-                Symbol.Set.mem conc.symbol rels)
-              fp.rules
+      (* Determine the edges of this stratum. Each rule should have at most
+       * a single unsolved relation in the hypothesis (where rules belonging
+       * to previous stratum are considered solved). This relation is the 
+       * src vertex; where there is no unsolved relation in the hypothesis 
+       * the start vertex is used instead as src *)
+      let edges = List.filter_map (fun (conc, hypo_props, constr) ->
+          let conc_int = int_of_symbol (symbol_of conc) in
+          let hypo_prop = 
+            match hypo_props with
+            | [] -> start_vert
+            | [hd] -> (int_of_symbol (symbol_of hd))
+            | _ -> failwith "CHC is non-linear"
           in
-          (* Determine the edges of this stratum. Each rule should have at most
-           * a single unsolved relation in the hypothesis (where rules belonging
-           * to previous stratum are considered solved). This relation is the 
-           * src vertex; where there is no unsolved relation in the hypothesis 
-           * the start vertex is used instead as src *)
-          let edges = List.filter_map (fun (conc, hypo_props, constr) ->
-              let conc_int = int_of_symbol (symbol_of conc) in
-              let solved prop = Hashtbl.mem path_soln (symbol_of prop) in
-              let unsolved = 
-                match BatList.filter (fun prop -> not (solved prop)) hypo_props with
-                | [] -> start_vert
-                | [hd] -> (int_of_symbol (symbol_of hd))
-                | lst -> List.iter (fun hd -> Log.errorf "ele is %a" (pp_symbol srk) (symbol_of hd)) lst; 
-                  failwith "CHC is non-linear"
-              in
-              let edge = (unsolved, conc_int) in
-              match BatHashtbl.find_option edge_weights edge with
-              | Some weights ->
-                BatHashtbl.replace edge_weights edge ((conc, hypo_props, constr) :: weights);
-                None
-              | None -> 
-                BatHashtbl.add edge_weights edge [(conc, hypo_props, constr)];
-                Some edge)
-              ruleset
-          in
-          let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
-          let wg = WeightedGraph.add_vertex wg goal_vert in
-          let vertices =
-            List.map (fun (a, b) -> [a; b]) edges
-            |> List.flatten
-            |> BatSet.Int.of_list 
-          in
-          let wg = 
-            BatSet.Int.fold (fun v wg -> 
-                WeightedGraph.add_vertex wg v)
-              vertices
-              wg
-          in
-          let wg = List.fold_left (fun wg (src, dst) ->
-              WG.add_edge
-                wg
-                src
-                (PE.mk_edge ctx src dst)
-                dst)
-              wg
-              edges
-          in
-          if true then (
-            Log.errorf "COMPUTING INVS";
-            let stratum_invs = chc_forward_analysis (module Abs.Sign) wg edge_weights invs in
-            WG.iter_vertex (fun v ->
-                if v = start_vert || v = goal_vert then ()
-                             else (Hashtbl.add invs v (stratum_invs v)))
-              wg)
-          else ();
-          let thunked_path rel = 
-            fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
-          in
-          let thunked_omega = 
-            fun () -> (WG.omega_path_weight wg omega_alg start_vert) 
-          in 
-          Symbol.Set.iter
-            (fun rel -> 
-               Hashtbl.add path_soln rel (thunked_path rel)) 
-            rels;
-          Symbol.Set.iter
-            (fun rel -> 
-               Hashtbl.add omega_soln rel thunked_omega) 
-            rels)
-        ordering;
-      path_soln, omega_soln, edge_weights
+          let edge = (hypo_prop, conc_int) in
+          match BatHashtbl.find_option edge_weights edge with
+          | Some weights ->
+            BatHashtbl.replace edge_weights edge ((conc, hypo_props, constr) :: weights);
+            None
+          | None -> 
+            BatHashtbl.add edge_weights edge [(conc, hypo_props, constr)];
+            Some edge)
+          fp.rules
+      in
+      let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
+      let wg = WeightedGraph.add_vertex wg goal_vert in
+      let vertices =
+        List.map (fun (a, b) -> [a; b]) edges
+        |> List.flatten
+        |> BatSet.Int.of_list 
+      in
+      let wg = 
+        BatSet.Int.fold (fun v wg -> 
+            WeightedGraph.add_vertex wg v)
+          vertices
+          wg
+      in
+      let wg = List.fold_left (fun wg (src, dst) ->
+          WG.add_edge
+            wg
+            src
+            (PE.mk_edge ctx src dst)
+            dst)
+          wg
+          edges
+      in
+      if true then (
+        Log.errorf "COMPUTING INVS";
+        let stratum_invs = chc_forward_analysis (module Abs.Sign) wg edge_weights invs in
+        WG.iter_vertex (fun v ->
+            if v = start_vert || v = goal_vert then ()
+            else (Hashtbl.add invs v (stratum_invs v)))
+          wg)
+      else ();
+      let thunked_path rel = 
+        fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
+      in
+      let thunked_omega = 
+        fun () -> (WG.omega_path_weight wg omega_alg start_vert) 
+      in 
+      thunked_path, thunked_omega, edge_weights
 
 
 
 
     let query_vc_condition fp pd =
-      match stratify fp with
-      | None -> failwith "No implementation for solving non super linear chc systems"
-      | Some ordering ->
-        let ordering = List.fold_left Symbol.Set.union Symbol.Set.empty ordering in
-        let ordering = [ordering] in
-        let thunked_path_exprs, _, weights = get_path_and_omega_path_expr fp ordering in
-        let dethunked = Memo.memo (fun rel -> (Hashtbl.find thunked_path_exprs rel) ()) in
-        let goal = 
-          (List.map (fun rel -> dethunked rel) (Symbol.Set.to_list fp.queries))
-        in
-        let table = PE.mk_table () in
-        let algebra = path_algebra pd table dethunked weights in
-        let constrs = List.map (fun pathexpr -> 
-            match PE.eval ~table ~algebra pathexpr with
-            | Edge (_, _, constr) -> constr)
-            goal 
-        in
-        mk_or srk constrs
+      let thunked_path_exprs, _, weights = get_path_and_omega_path_expr fp in
+      let dethunked = Memo.memo (fun rel -> thunked_path_exprs rel ()) in
+      let goal = 
+        (List.map (fun rel -> dethunked rel) (Symbol.Set.to_list fp.queries))
+      in
+      let table = PE.mk_table () in
+      let algebra = path_algebra pd table dethunked weights in
+      let constrs = List.map (fun pathexpr -> 
+          match PE.eval ~table ~algebra pathexpr with
+          | Edge (_, _, constr) -> constr)
+          goal 
+      in
+      mk_or srk constrs
 
     let check fp pd =
       let phi = query_vc_condition fp pd in
@@ -781,10 +687,7 @@ module Make
 *)
 
 
-    let solve fp _pd =
-      match stratify fp with
-      | None -> failwith "No implementation for solving non super linear chc systems"
-      | Some _ordering -> (*solve_super_lin fp ordering*) assert false
+    let solve _fp _pd = assert false
 
   end
 
