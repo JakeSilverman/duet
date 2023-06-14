@@ -51,7 +51,9 @@ type 'a open_pathexpr =
 type 'a open_nested_pathexpr =
   [ `Segment of 'a
   | 'a open_pathexpr ]
-  
+
+val open_pathexpr_edge_of : 'a t -> 'a open_pathexpr
+
 (** An algebra is a structure equiped with operations for interpreting each
     path expression operation.  *)
 type 'a algebra = 'a open_pathexpr -> 'a

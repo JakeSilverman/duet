@@ -105,6 +105,13 @@ let mk_omega_mul = mk_mul
 let promote x = x
 let promote_omega x = x
 
+let open_pathexpr_edge_of p =
+  match p.obj with
+  | Edge (x, y) -> `Edge (x, y)
+  | One -> `One
+  | Zero -> `Zero
+  | _ -> assert false
+
 let destruct_flat p =
   let rec destruct_mul p =
     match p.obj with
