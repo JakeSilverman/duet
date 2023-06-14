@@ -176,25 +176,9 @@ module Make
 
 
 
-    let rec edge pd table soln weights src dst =
+    let rec edge weights src dst =
       let rules = Hashtbl.find weights (src, dst) in
-      let constrs' = 
-        List.map (fun (conc, hypo_props, constr) ->
-              let substs = List.map (fun prop ->
-                  if (int_of_symbol prop.symbol) = src
-                  then None
-                  else (
-                    let soln_expr = soln (prop.symbol) in
-                    let algebra = path_algebra pd table soln weights in
-                    let soln_edge : 'a edge = PE.eval ~table ~algebra soln_expr in
-                    match soln_edge with
-                    | Edge (_, _, constr) -> Some constr))
-                  hypo_props
-              in
-              let substs = None :: substs in
-              substitute_rel (conc, hypo_props, constr) substs)
-          rules
-      in
+      let constrs = List.map (fun (_, _, constr) -> constr) rules in
       let (conc, hypo_props, _) = List.hd rules in
       let src_fvs =
         if src = start_vert then []
@@ -204,7 +188,7 @@ module Make
       in
       (Edge (BatList.combine conc.names (Proposition.typ_of_params conc),
              src_fvs,
-             mk_or srk constrs'))
+             mk_or srk constrs))
     
     and add x y =
       match x, y with
@@ -313,8 +297,8 @@ module Make
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         Edge (p_c, p_h, phi') 
 
-    and path_algebra pd table soln weights = function 
-      | `Edge (src, dst) -> edge pd table soln weights src dst
+    and path_algebra pd weights = function 
+      | `Edge (src, dst) -> edge weights src dst
       | `Mul (edge1, edge2) -> mul edge1 edge2
       | `Add (edge1, edge2) -> add edge1 edge2
       | `Star (edge) -> star pd edge
@@ -656,7 +640,7 @@ module Make
         (List.map (fun rel -> dethunked rel) (Symbol.Set.to_list fp.queries))
       in
       let table = PE.mk_table () in
-      let algebra = path_algebra pd table dethunked weights in
+      let algebra = path_algebra pd weights in
       let constrs = List.map (fun pathexpr -> 
           match PE.eval ~table ~algebra pathexpr with
           | Edge (_, _, constr) -> constr)
@@ -916,7 +900,7 @@ module Make
           | `Atom (`Arith (`Eq, i, j)) ->
             begin match ArithTerm.destruct srk i, ArithTerm.destruct srk j with
               | `Var (i, _), `Var (j, _) ->
-                if BatSet.Int.mem i fvcands && BatSet.Int.mem j fvcands then
+                if BatSet.Int.mem i fvcands || BatSet.Int.mem j fvcands then
                   BatUref.unite ~sel:BatSet.Int.union (fv_classes i) (fv_classes j)
                 else ()
               | _ -> ()
