@@ -133,7 +133,6 @@ module Make
     let get_rules fp = fp.rules
 
     type 'a edge = Edge of (string * typ_fo) list * (string * typ_fo) list * 'a formula
-    (*type 'a omega_edge = OEdge of (string * typ_fo) list * 'a formula*)
     let goal_vert = -2 
     let start_vert = -1
    
@@ -304,21 +303,22 @@ module Make
       | `Star (edge) -> star pd edge
       | `Zero -> assert false
       | `One -> assert false
-(*
+      | `Segment _ -> assert false
+
+
+    type 'a omega_edge = OEdge of (string * typ_fo) list * 'a formula
+
     let omega edge =
       match edge with
       | Edge (p_c, p_h, phi) ->
-        let t1 = time "Omega Star Enter" in
-
+        Log.errorf "PHI IS %a" (Formula.pp srk) phi;
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
         let var_to_sym = Hashtbl.create 97 in
-        let num_trs = List.length p_c in
         let trs = 
           BatList.map2i (fun ind (name1, typ1) (name2, typ2) ->
               let s1 = mk_symbol srk ~name:name1 (typ1 :> typ) in
               let s2 = mk_symbol srk ~name:(name2) (typ2 :> typ) in
-              Hashtbl.add var_to_sym s1 (num_trs + ind);
-              Hashtbl.add var_to_sym s2 ind;
+              Hashtbl.add var_to_sym s1 (ind);
               s1, s2)
             p_h
             p_c
@@ -333,7 +333,6 @@ module Make
             phi
         in
         let tf = TransitionFormula.make ~exists phi trs in
-
         let mpped = AD.mp srk tf in
         
         let phi' =
@@ -350,39 +349,61 @@ module Make
             srk
             (Quantifier.miniscope srk phi')
         in
-        OEdge (p_c, phi') 
-*)
+        Log.errorf "OMEGA IS %a" (Formula.pp srk) phi';
+        Log.errorf "Size of p_h is %n and p_c is %n" (List.length p_h) (List.length p_c);
+        let syms = Memo.memo (fun (ind, typ) ->
+            Log.errorf "looking for sym %n" ind;
+            let name = fst (List.nth p_h ind) in
+            let s = mk_symbol srk ~name (typ :> typ)  in
+            mk_const srk s)
+        in
+        let phi_const =
+          substitute
+            srk
+            (fun fv -> syms fv)
+            phi'
+        in
+        to_file srk phi_const "/Users/jakesilverman/Documents/omega.smt2";
 
-(*
-    let preimage transition formula =
-      let open Syntax in
-      let transition = K.linearize transition in
-      let fresh_skolem =
-        Memo.memo (fun sym ->
-            let name = show_symbol srk sym in
-            let typ = typ_symbol srk sym in
-            mk_const srk (mk_symbol srk ~name typ))
-      in
-      let subst sym =
-        match V.of_symbol sym with
-        | Some var ->
-          if K.mem_transform var transition then
-            K.get_transform var transition
-          else
-            mk_const srk sym
-        | None -> fresh_skolem sym
-      in
-      mk_and srk [SrkSimplify.eliminate_floor srk (K.guard transition);
-                  substitute_const srk subst formula]
+        OEdge (p_h, phi') 
 
-*)
 
-    (*let omega_mul tf s = assert false
+    let omega_mul tf s = 
+      match tf, s with
+      | Edge (p_c, p_h, phi1), OEdge(_, phi2) ->
+        let phi' =
+          List.fold_left (fun phi (name, typ) ->
+              mk_exists srk ~name typ phi)
+            (mk_and srk [phi1; phi2])
+            p_c
+        in
+        let phi'' = Quantifier.eq_guided_qe srk phi' in
+        OEdge (p_h, phi'')
+
+
+  
     let omega_add s1 s2 =
       match s1, s2 with
-      | OEdge (v1, phi1), OEdge (v2, phi2) ->
+      | OEdge (v1, phi1), OEdge (_, phi2) ->
         OEdge (v1, mk_or srk [phi1; phi2])
-*)
+
+    type ('a,'b) open_omega_pathexpr =
+      [ `Omega of 'a
+      | `Mul of 'a * 'b
+      | `Add of 'b * 'b ]
+
+    (** An omega algebra is a structure equiped with operations for
+        interpreting each omega path expression operation.  *)
+    type ('a,'b) omega_algebra = ('a,'b) open_omega_pathexpr -> 'b
+
+
+
+    let omega_path_algebra : ('a,'b) omega_algebra = function 
+      | `Omega edge -> omega edge
+      | `Mul (edge1, edge2) -> omega_mul edge1 edge2
+      | `Add (edge1, edge2) -> omega_add edge1 edge2
+
+
     let over_approx_arrays phi =
       let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
       let bools = Memo.memo (fun _ -> mk_symbol srk `TyBool) in
@@ -408,7 +429,7 @@ module Make
     module Abs = Abstract.MakeAbstractRSY(C)
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
-    let chc_forward_analysis (type a) (module D : Absd with type t = a) wg edge_weights invs = 
+    let _chc_forward_analysis (type a) (module D : Absd with type t = a) wg edge_weights invs = 
       let sym_to_ind = Hashtbl.create 97 in
       let conc_vars = Memo.memo (fun (ind, typ) -> 
           let s = mk_symbol srk (typ :> typ) in
@@ -553,7 +574,7 @@ module Make
       let open WeightedGraph in
       let open Proposition in
       let edge_weights = Hashtbl.create 97 in
-      let invs = Hashtbl.create 97 in
+      (*let invs = Hashtbl.create 97 in*)
       let ctx = PE.mk_context () in
       let alg = 
         {mul=PE.mk_mul ctx; 
@@ -614,14 +635,14 @@ module Make
           wg
           edges
       in
-      if true then (
+      (*if true then (
         Log.errorf "COMPUTING INVS";
         let stratum_invs = chc_forward_analysis (module Abs.Sign) wg edge_weights invs in
         WG.iter_vertex (fun v ->
             if v = start_vert || v = goal_vert then ()
             else (Hashtbl.add invs v (stratum_invs v)))
           wg)
-      else ();
+      else ();*)
       let thunked_path rel = 
         fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
       in
@@ -654,22 +675,18 @@ module Make
       | `Unsat  -> `No
       | `Unknown -> `Unknown
       | `Sat -> `Unknown
-(*
-    let query_vc_terminates fp pd mp =
-      match stratify fp with
-      | None -> failwith "No implementation for solving non super linear chc systems"
-      | Some ordering ->
-        let soln, weights, goal = get_path_and_omega_path_expr fp ordering in
-        let table = PE.mk_table () in
-        let algebra = path_algebra pd table soln weights in
-        let constrs = List.map (fun pathexpr -> 
-            match PE.eval ~table ~algebra pathexpr with
-            | Edge (_, _, constr) -> constr)
-            goal 
-        in
-        mk_or srk constrs
-*)
 
+    let query_vc_terminates fp pd =
+      let _, thunked_omega_path_exprs, weights = get_path_and_omega_path_expr fp in
+      let omega_pe = thunked_omega_path_exprs () in
+      let table = PE.mk_omega_table (PE.mk_table ()) in
+      let algebra = path_algebra pd weights in
+      let omega_algebra = omega_path_algebra in
+      let constr =  
+          match PE.eval_omega ~table ~algebra ~omega_algebra omega_pe with
+          | OEdge (_, constr) -> constr
+      in
+      constr
 
     let solve _fp _pd = assert false
 
@@ -1525,9 +1542,9 @@ module Make
 
     let rec check_q_array phi =
       match Formula.destruct srk phi with
-      | `Quantify (_, _, typ, phi) ->
+      | `Quantify (qtyp, name, typ, phi) ->
         if typ = `TyArr then assert false
-        else check_q_array phi
+        else Formula.construct srk (`Quantify (qtyp, name, typ, check_q_array phi))
       | open_phi -> Formula.construct srk open_phi
 
     let check_q_array_chc fp =
@@ -1850,6 +1867,7 @@ module Make
             conc, hypo, phi')
           fp
       in
+ 
       let step2b = time () in
 
       let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
@@ -1859,7 +1877,7 @@ module Make
       let fp'' = 
         apply_offset_candidates_new fp' cell_to_offsets chcvar_to_cell sym_to_cell 
       in
-
+ 
 
       let step3 = time () in
       let fp'' = 
@@ -1887,7 +1905,6 @@ module Make
       let fp'3 = 
         Fp.map_rules (fun (conc, hypo, constr) ->
             let constr'' = Quantifier.miniscope srk constr in
-
             let constr' =
               Quantifier.eq_guided_qe 
                 srk
@@ -1897,10 +1914,11 @@ module Make
             let constr' = Quantifier.eq_guided_elim_loop srk constr' in
 
 
+
             conc, hypo, constr')
           fp'3
       in
-
+ 
       let step6 = time () in
 
       diff step1 step2 "1 to 2";
@@ -1911,6 +1929,8 @@ module Make
       diff step5 step6 "5 to 6";
 
       let fp'3 =check_q_array_chc fp'3 in
+  Log.errorf "FP FINAL is %a" (Fp.pp) fp'3;
+ 
       fp'3
   end
 end
