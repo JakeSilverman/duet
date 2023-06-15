@@ -59,7 +59,11 @@ module Make
      * relation can be reached in the fp where recursion over-approximated using 
      * the star operator of the provided predomain [pd].*)
     val query_vc_condition : 
+      fp -> (module Iteration.PreDomain) -> C.t formula
+
+    val query_vc_terminates : 
       fp -> (module Iteration.PreDomain) -> C.t formula 
+
     (** Solves a fp where recursion is over-approximated using the
      * star operator of the provided predomain [pd]. Where [f = solve srk fp pd]
      * and [r] is a relation used in [fp] the set of solutions to [r] is given by
