@@ -923,7 +923,8 @@ module Make
 
     (* Determines which integer fvs are equal in constr, only considering those
      * free fvs that appear in fvcands *)
-    let determine_eq_int_fvs srk constr fvcands : BatSet.Int.t list =
+   (* let determine_eq_int_fvs srk constr fvcands : BatSet.Int.t list =
+      Log.errorf "constr is %a" (Formula.pp srk) constr;
       let fv_classes = Memo.memo (fun a -> BatUref.uref (BatSet.Int.singleton a)) in
       let conjs = match Formula.destruct srk constr with
         | `And conds -> conds
@@ -950,8 +951,8 @@ module Make
       in
       let fv_classes = List.map (fun uref -> BatUref.uget uref) fv_uclasses in
       fv_classes
-
-    (*
+*)
+    
     let determine_eq_int_fvs srk constr fvcands =
       let syms_to_fvs = Hashtbl.create 97 in
       let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
@@ -992,7 +993,7 @@ module Make
           cells_syms
       in
       cells_fvs
-*)
+
 
     let iter_fvs f props =
       let _ = List.fold_left (fun fv_counter prop ->
@@ -1037,7 +1038,7 @@ module Make
       in
       let rule_clauses =
         List.map (fun (conc, hypo, constr) ->
-            Log.errorf "constr is %a" (Formula.pp srk) constr;
+            Log.errorf "DET EQ constr is %a" (Formula.pp srk) constr;
             let chcvar_of_fv = Hashtbl.create 97 in
             let congruent_fvs = 
               BatArray.make (List.length (Proposition.names_of conc)) [] 
@@ -1499,8 +1500,10 @@ module Make
             let subchc_formula = 
               create_offset_formula subchc symb_rel_params offsetcands 
             in
-            let offset_formula = mk_and srk subchc_formula in
+            List.iter (fun sub -> Log.errorf "Sub formula is %a" (Formula.pp srk) sub) subchc_formula;
 
+            let offset_formula = mk_and srk subchc_formula in
+            Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
             let solver = Smt.mk_solver srk in
             Smt.Solver.add solver [offset_formula];
             match Smt.Solver.get_model solver with
@@ -1901,6 +1904,7 @@ module Make
           fp'
       in
 
+
       let step4 = time () in
       (* Unskolemize *)
       let fp'3 = 
@@ -1915,6 +1919,8 @@ module Make
             conc, hypo, constr')
           fp''
       in
+
+      let fp'3 = Fp.filter_rules (fun (_, _, constr) -> constr != mk_false srk) fp'3 in
 
       let step5 = time () in
       let fp'3 = 
