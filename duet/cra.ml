@@ -1299,7 +1299,6 @@ let array_analyze file =
   let offsetdone = time () in
   diff init offsetdone "offset done";
   let phi = CHC.Fp.query_vc_condition fp ad in
-  Log.errorf "phi is %a" (Syntax.Formula.pp srk) phi;
   let phi = Syntax.eliminate_ite srk phi in
   let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
   let phi = Syntax.eliminate_ite srk phi in
