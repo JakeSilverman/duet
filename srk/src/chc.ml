@@ -238,6 +238,8 @@ module Make
     and star pd x =
       match x with
       | Edge (p_c, p_h, phi) ->
+
+        Log.errorf "PHI ENTRY is %a" (Formula.pp srk) phi;
         let t1 = time "Star Enter" in
 
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
@@ -290,6 +292,23 @@ module Make
             srk
             (Quantifier.miniscope srk phi')
         in
+        let syms = Memo.memo (fun (ind, typ) ->
+            Log.errorf "looking for sym %n" ind;
+            let name = 
+              if ind < List.length p_c then (
+                (fst (List.nth p_c ind))^"'")
+              else fst (List.nth p_c (ind - List.length p_c))
+            in
+            let s = mk_symbol srk ~name (typ :> typ)  in
+            mk_const srk s)
+        in
+        let _phi_const =
+          substitute
+            srk
+            (fun fv -> syms fv)
+            phi'
+        in
+
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
         if t3 -. t1 > 100.1 then assert false else ();
@@ -357,13 +376,12 @@ module Make
             let s = mk_symbol srk ~name (typ :> typ)  in
             mk_const srk s)
         in
-        let phi_const =
+        let _phi_const =
           substitute
             srk
             (fun fv -> syms fv)
             phi'
         in
-        to_file srk phi_const "/Users/jakesilverman/Documents/omega.smt2";
 
         OEdge (p_h, phi') 
 
@@ -549,7 +567,6 @@ module Make
           Log.errorf "Now phi is %a" (Formula.pp srk) phi;
           let exists sym = List.mem sym conc_vars in
           let post' = Abs.abstract ~exists (module D) phi in
-          to_file srk phi "/Users/jakesilverman/Documents/arraysmttests/finv.smt2";
 
           (*assert (not (D.equal (D.join post' post) D.bottom));*) 
           if D.equal (D.join post' post) post then None else Some (D.join post' post)
@@ -932,8 +949,6 @@ module Make
           []
       in
       let fv_classes = List.map (fun uref -> BatUref.uget uref) fv_uclasses in
-      List.iter (fun fv_class -> Log.errorf "PRINTING CLASS";
-                BatSet.Int.iter (fun n -> Log.errorf "VAR IS %n" n) fv_class) fv_classes;
       fv_classes
 
     (*
@@ -1484,9 +1499,7 @@ module Make
             let subchc_formula = 
               create_offset_formula subchc symb_rel_params offsetcands 
             in
-            List.iter (fun subchc -> Log.errorf "sub form is %a" (Formula.pp srk) subchc) subchc_formula;
             let offset_formula = mk_and srk subchc_formula in
-            Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
 
             let solver = Smt.mk_solver srk in
             Smt.Solver.add solver [offset_formula];
@@ -1610,6 +1623,14 @@ module Make
 
 
     let apply_offset_candidate constr offsets =
+      Log.errorf "Constr is %a" (Formula.pp srk) constr;
+      Hashtbl.iter (fun k v -> 
+        match k, v with
+          | Sym sym, Some v -> Log.errorf "Sym is %a and offset is %n" (pp_symbol srk) sym v
+          | Fv fv, Some v -> Log.errorf "Fv is %n and offset is %n " fv v
+          | Sym sym, None -> Log.errorf "Sym is %a and offset is NONE" (pp_symbol srk) sym 
+          | Fv fv, None -> Log.errorf "Fv is %n and offset is NONE " fv)
+         offsets;
       let rec apply_offset_formula = function
         | `Atom (`Arith (op, s, t)) ->
           let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
@@ -1642,6 +1663,7 @@ module Make
         | `App (sym, []) ->
           mk_const srk sym, (Hashtbl.find offsets (Sym sym))
         | `Var (ind, typ) ->
+          Log.errorf "Need offset for var %n" ind;
           mk_var srk ind (typ :> typ_fo), (Hashtbl.find offsets (Fv ind))
         | `Store ((a, offset), i, v) ->
           let unwrapped_offset = Option.get offset in
@@ -1870,20 +1892,13 @@ module Make
  
       let step2b = time () in
 
-      let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
-        determine_offsets fp'
-      in
-      let step2 = time () in
-      let fp'' = 
-        apply_offset_candidates_new fp' cell_to_offsets chcvar_to_cell sym_to_cell 
-      in
- 
+
 
       let step3 = time () in
       let fp'' = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) ->
             conc, hypo, pos_bool_elim constr (Hashtbl.find skolemized_vars ind))
-          fp''
+          fp'
       in
 
       let step4 = time () in
@@ -1918,7 +1933,52 @@ module Make
             conc, hypo, constr')
           fp'3
       in
- 
+
+
+      let skolemized_vars = BatHashtbl.create 97 in
+
+      let fp = 
+        Fp.mapi_rules (fun ind (conc, hypo, constr) ->
+
+            let phi', syms = skolemize_eh 0 constr in
+
+            BatHashtbl.add skolemized_vars ind syms;
+            conc, hypo, phi')
+          fp'3
+      in
+
+
+      let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
+        determine_offsets fp
+      in
+      let step2 = time () in
+      let fp = 
+        apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell 
+      in
+
+
+
+
+      let fp = 
+        Fp.mapi_rules (fun ind (conc, hypo, constr) ->
+            conc, hypo, pos_bool_elim constr (Hashtbl.find skolemized_vars ind))
+          fp
+      in
+
+      (* Unskolemize *)
+      let fp'3 = 
+        Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
+            let constr' =
+              mk_exists_consts
+                srk
+                (fun sym -> not (Symbol.Set.mem sym (BatHashtbl.find skolemized_vars ind)))
+                constr
+            in
+
+            conc, hypo, constr')
+          fp
+      in
+
       let step6 = time () in
 
       diff step1 step2 "1 to 2";
