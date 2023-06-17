@@ -1128,10 +1128,10 @@ module Make
       let int_adj_eqs = BatHashtbl.create 97 in 
       let dir_eqs = Memo.memo (fun fv -> BatUref.uref (BatSet.Int.singleton fv)) in
 
-      let int_varset_of_term term = 
+      let int_varset_of_term term =
         let varset = 
           BatHashtbl.fold (fun fv typ varset ->
-              if typ = `TyInt then VarSet.add (Fv fv) varset else assert false)
+              if typ = `TyInt then VarSet.add (Fv fv) varset else varset)
             (free_vars term)
             VarSet.empty
         in
@@ -1557,6 +1557,7 @@ module Make
 
 
     let rec check_q_array phi =
+      Log.errorf "phi is %a" (Formula.pp srk) phi;
       match Formula.destruct srk phi with
       | `Quantify (qtyp, name, typ, phi) ->
         if typ = `TyArr then assert false
@@ -1879,6 +1880,272 @@ module Make
           phi
       in
       phi
+    
+    let start_vert = -1
+    let goal_vert = -2
+
+    module EQDom = struct
+      type 'a t = 
+        | Classes of BatSet.Int.t list
+        | Bottom
+
+      let formula_of classes =
+        match classes with
+        | Bottom -> mk_false srk
+        | Classes equivs ->
+          List.fold_left (fun all_eqs equiv_class ->
+              let rep = BatSet.Int.any equiv_class in
+              let eqs = BatSet.Int.fold (fun ele lst ->
+                  (mk_eq srk (mk_var srk ele `TyInt) (mk_var srk rep `TyInt)) :: lst)
+                  equiv_class
+                  []
+              in
+              eqs @ all_eqs)
+            []
+            equivs
+          |> mk_and srk
+
+      let join eq1 eq2 =
+        match eq1, eq2 with
+        | Bottom, a
+        | a, Bottom -> a
+        | Classes equivs1, Classes equivs2 ->
+          let intscts = 
+            List.map (fun equiv1 ->
+                List.filter_map (fun equiv2 -> 
+                    let inter = BatSet.Int.inter equiv1 equiv2 in
+                    if BatSet.Int.is_empty inter then None
+                    else Some inter) 
+                  equivs2)
+              equivs1
+            |> List.flatten
+          in
+          let all = 
+            List.fold_left 
+              BatSet.Int.union
+              (List.fold_left BatSet.Int.union BatSet.Int.empty equivs2)
+              equivs1
+          in
+          let used = List.fold_left BatSet.Int.union BatSet.Int.empty intscts in
+          let remain = BatSet.Int.diff all used in
+          let singletons = 
+            List.map (fun ele -> BatSet.Int.singleton ele) (BatSet.Int.to_list remain)
+          in
+          Classes (singletons @ intscts)
+
+      let abstract phi fvs =
+        Log.errorf "ABSTRACT ENTERED with %n fv" (BatSet.Int.cardinal fvs);
+        let syms_to_fvs = Hashtbl.create 97 in
+        let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
+            let sym = mk_symbol srk ~name:"DET EQS" (typ :> typ) in
+            if BatSet.Int.mem ind fvs 
+            then Hashtbl.add syms_to_fvs sym ind 
+            else ();
+            sym) 
+        in
+        let phi' = 
+          substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) phi 
+        in
+        BatSet.Int.iter (fun fv ->
+            let _ = fvs_to_syms (fv, `TyInt) in ())
+          fvs;
+
+        let cells_syms = 
+          BatHashtbl.fold (fun sym _ cells ->
+              let rec place_in_cell unchecked_cells =
+                match unchecked_cells with
+                | [] -> [Symbol.Set.singleton sym]
+                | hd :: tl ->
+                  let rep = Symbol.Set.any hd in
+                  let eq = (mk_eq srk (mk_const srk sym) (mk_const srk rep)) in  
+                  begin match Smt.entails srk phi' eq with
+                    | `Yes -> (Symbol.Set.add sym hd) :: tl
+                    | `No -> hd :: (place_in_cell tl) 
+                    | `Unknown -> 
+                      failwith "determine_eq_int_fvs failure" 
+                  end
+              in
+              place_in_cell cells)
+            syms_to_fvs
+            []
+        in
+        let cells_fvs = 
+          List.map (fun cell ->
+              List.map (fun s -> 
+                  Hashtbl.find syms_to_fvs s) 
+                (Symbol.Set.elements cell)
+              |> BatSet.Int.of_list)
+            cells_syms
+        in
+        Log.errorf "Size of cells is %n" (List.length cells_fvs);
+        Classes cells_fvs
+
+      let equal equivs1 equivs2 =
+        match equivs1, equivs2 with
+        | Bottom, Bottom -> true
+        | Bottom, _
+        | _, Bottom -> false
+        | Classes equivs1, Classes equivs2 ->
+          (* Jake: List.mem fails here... not good for set eq *)
+          if List.length equivs1 = List.length equivs2 &&
+             BatList.for_all (fun eq1 -> 
+                 List.exists (fun eq2 -> BatSet.Int.equal eq1 eq2) equivs2)
+                 equivs1 then true
+          else false
+
+      let top = Classes []
+      let bottom = Bottom
+    end
+
+    let fv_union_analysis fp =
+      let open WeightedGraph in
+      let open Proposition in
+      let edge_weights = Hashtbl.create 97 in
+      (*let invs = Hashtbl.create 97 in*)
+      let ctx = PE.mk_context () in
+      let alg = 
+        {mul=PE.mk_mul ctx; 
+         add=PE.mk_add ctx; 
+         star=PE.mk_star ctx; 
+         zero=PE.mk_zero ctx; 
+         one=PE.mk_one ctx} 
+      in
+      (* Determine the edges of this stratum. Each rule should have at most
+       * a single unsolved relation in the hypothesis (where rules belonging
+       * to previous stratum are considered solved). This relation is the 
+       * src vertex; where there is no unsolved relation in the hypothesis 
+       * the start vertex is used instead as src *)
+      let edges = List.filter_map (fun (conc, hypo_props, constr) ->
+          let conc_int = int_of_symbol (symbol_of conc) in
+          let hypo_prop = 
+            match hypo_props with
+            | [] -> start_vert
+            | [hd] -> (int_of_symbol (symbol_of hd))
+            | _ -> failwith "CHC is non-linear"
+          in
+          let edge = (hypo_prop, conc_int) in
+          match BatHashtbl.find_option edge_weights edge with
+          | Some weights ->
+            BatHashtbl.replace edge_weights edge ((conc, hypo_props, constr) :: weights);
+            None
+          | None -> 
+            BatHashtbl.add edge_weights edge [(conc, hypo_props, constr)];
+            Some edge)
+          fp.rules
+      in
+      let wg = WeightedGraph.add_vertex (WeightedGraph.empty alg) start_vert in
+      let wg = WeightedGraph.add_vertex wg goal_vert in
+      let vertices =
+        List.map (fun (a, b) -> [a; b]) edges
+        |> List.flatten
+        |> BatSet.Int.of_list 
+      in
+      let wg = 
+        BatSet.Int.fold (fun v wg -> 
+            WeightedGraph.add_vertex wg v)
+          vertices
+          wg
+      in
+      let wg = List.fold_left (fun wg (src, dst) ->
+          WG.add_edge
+            wg
+            src
+            (PE.mk_edge ctx src dst)
+            dst)
+          wg
+          edges
+      in
+      let update ~pre edge ~post =
+        match (PE.open_pathexpr_edge_of edge) with
+        | `Edge (src, dst) ->
+          Log.errorf "ENTERING UPDATE For edge %n to %n" src dst;
+          let weights = Hashtbl.find edge_weights (src, dst) in
+          let p_conc = let (conc, _, _) = List.hd weights in (Proposition.typ_of_params conc) in
+
+          let pre' = 
+            substitute
+              srk
+              (fun (ind, typ) ->
+                 mk_var srk (ind + (List.length p_conc)) typ)
+              (EQDom.formula_of pre)
+          in
+          Log.errorf "FORM OF PRE is %a" (Formula.pp srk) pre';
+          let phi =
+            let edge = List.map (fun (_, _, constr) -> constr) weights in
+            mk_and srk [pre'; mk_or srk edge]
+          in
+          let fvs = BatList.filteri_map (fun ind typ -> 
+              if typ = `TyInt then Some ind else None) p_conc |> BatSet.Int.of_list in
+          BatSet.Int.iter (fun fv -> Log.errorf "Reasoning about fv %n" fv) fvs; 
+          Log.errorf "CONSTR IS %a" (Formula.pp srk) phi;
+          let post' = EQDom.abstract phi fvs in
+          let pp_int_set_list sl =
+            match sl with 
+            | EQDom.Bottom -> Log.errorf "IS BOTTOM"
+            | Classes sl ->          
+              Log.errorf "Printing list of int sets";
+              List.iter (fun s1 -> Log.errorf "Set is";
+                          BatSet.Int.iter (fun ele -> Log.errorf "Contains %n" ele) s1)
+                sl
+          in
+          Log.errorf "NOW IS";
+          pp_int_set_list post';
+          Log.errorf "WAS";
+          pp_int_set_list post;
+          Log.errorf "EQUAL %b" (EQDom.equal (EQDom.join post' post) post);
+          if EQDom.equal (EQDom.join post' post) post then None else Some (EQDom.join post' post)
+        | _ -> assert false
+      in
+      let init v =
+        if v = start_vert then
+          EQDom.top
+        else
+          EQDom.bottom
+      in
+      let entry = start_vert in
+      let symbed_invs = WG.forward_analysis wg ~entry ~update ~init in
+      fun vertex -> match (symbed_invs vertex) with Bottom -> assert false | Classes eq -> eq
+
+
+
+
+    let coalesce_eqs fp invs =
+      Fp.map_rules (fun (conc, hypos, constr) ->
+          Log.errorf "Rule is %a" (Fp.pp_rule) (conc, hypos, constr);
+          let constr', _ = 
+            List.fold_left (fun (constr, param_counter) prop ->
+
+                let num_params = List.length (Proposition.typ_of_params prop) in
+                let equivs = invs (int_of_symbol prop.symbol) in
+                let subst = Hashtbl.create 97 in
+                List.iter (fun equivs ->
+                    let rep = BatSet.Int.min_elt equivs in
+                    BatSet.Int.iter (fun ele -> Hashtbl.add subst ele rep) equivs
+                  )
+                  equivs;
+                Hashtbl.iter (fun v k -> Log.errorf "Val %n to key %n" v k) subst;
+                Log.errorf "Num params is %n" num_params;
+                let constr = 
+                  substitute
+                    srk
+                    (fun (ind, typ) ->
+                       if typ != `TyInt then mk_var srk ind typ else (
+                         Log.errorf "Looking for param %n minus %n" (ind) param_counter;
+                         if ind < param_counter
+                         then mk_var srk ind `TyInt
+                         else if ind >= param_counter && ind < param_counter + num_params
+                         then mk_var srk ((Hashtbl.find subst (ind - param_counter)) + param_counter) `TyInt
+                         else mk_var srk ind `TyInt))
+                    constr
+                in
+                constr, param_counter + num_params)
+            (constr, 0)
+            (conc :: hypos) 
+          in
+          conc, hypos, constr')
+        fp
+
+
 
     let offset_analysis fp =
       let skolemized_vars = BatHashtbl.create 97 in
@@ -1921,6 +2188,18 @@ module Make
       in
 
       let fp'3 = Fp.filter_rules (fun (_, _, constr) -> constr != mk_false srk) fp'3 in
+
+
+      let invs =  fv_union_analysis fp'3 in
+
+
+
+      let fp = coalesce_eqs fp'3 invs in  
+      Log.errorf "Pre coalese is %a" Fp.pp fp'3;
+
+      Log.errorf "POST coalese is %a" Fp.pp fp;
+      let fp'3 = fp in
+
 
       let step5 = time () in
       let fp'3 = 
@@ -1994,7 +2273,7 @@ module Make
       diff step4 step5 "4 to 5";
       diff step5 step6 "5 to 6";
 
-      let fp'3 =check_q_array_chc fp'3 in
+      (*let fp'3 =check_q_array_chc fp'3 in*)
   Log.errorf "FP FINAL is %a" (Fp.pp) fp'3;
  
       fp'3
