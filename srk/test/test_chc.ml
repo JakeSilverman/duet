@@ -2,7 +2,6 @@ open Srk
 open OUnit
 open Syntax
 open Test_pervasives
-open Chc
 open Iteration
 
 let pd = (module Product(LossyTranslation)(PolyhedronGuard) :
@@ -22,7 +21,7 @@ let mk_rel_atom_fresh srk fp ?(name="R") syms =
 
 let mk_n_rel_atoms_fresh srk fp ?(name="R") syms n = 
   BatArray.init n (fun _ -> mk_rel_atom_fresh srk fp ~name syms)*)
-
+(*
 let countup1 () =
   let r1 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt], `TyBool)) in
   let r2 = mk_symbol srk ~name:"R2" (`TyFun ([`TyInt], `TyBool)) in
@@ -133,22 +132,109 @@ let failure_suplin () =
   in
   let res = Fp.check srk fp pd in
   assert (res = `No)
+*)
+
+open Chc.Make(Ctx)
 
 
+
+let inv_check () =
+  let r0 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt; `TyInt], `TyBool)) in
+  let r1 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt; `TyInt], `TyBool)) in
+  let r2 = mk_symbol srk ~name:"R2" (`TyFun ([`TyInt; `TyInt], `TyBool)) in
+  let error = mk_symbol srk ~name:"Error" `TyBool in
+ 
+  let fp = Fp.empty in
+  let prop0 = Proposition.mk_proposition r0 ["a"; "b"] in
+  let prop1 = Proposition.mk_proposition r1 ["x"; "y"] in
+  let prop2 = Proposition.mk_proposition r2 ["x'"; "y'"] in
+  let errorprop = Proposition.mk_proposition error [] in
+  let fp =
+    let open Infix in
+    Fp.add_rule fp prop0 [] (var 0 `TyInt = (int 1) && var 1 `TyInt = (int 1)) |> 
+    fun fp -> Fp.add_rule fp prop1 [prop0] (var 0 `TyInt = var 2 `TyInt + (int 1) &&
+                                           var 1 `TyInt = var 3 `TyInt + (int 1)) |>
+    fun fp -> Fp.add_rule fp prop2 [prop1] (var 0 `TyInt = var 2 `TyInt + (int 1) &&
+                                           var 1 `TyInt = var 3 `TyInt + (int 1)) |>
+    (*fun fp -> Fp.add_rule fp prop1 [prop2] (var 0 `TyInt = var 2 `TyInt - (int 5) &&
+                                           var 1 `TyInt = var 3 `TyInt + (int 1)) |>*)
+    fun fp -> Fp.add_rule fp errorprop [prop2] (mk_true srk) |>
+    fun fp -> Fp.add_query fp error
+  in
+  let res = Fp.check fp pd in
+  assert (res = `No)
+
+
+let test_term_non_term () =
+  let r0 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt], `TyBool)) in
+  let r1 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt], `TyBool)) in
+  let error = mk_symbol srk ~name:"Error" `TyBool in
+ 
+  let fp = Fp.empty in
+  let prop0 = Proposition.mk_proposition r0 ["x"] in
+  let prop1 = Proposition.mk_proposition r1 ["y"] in
+  let errorprop = Proposition.mk_proposition error [] in
+  let fp =
+    let open Infix in
+    Fp.add_rule fp prop0 [] (var 0 `TyInt = (int 0)) |> 
+    fun fp -> Fp.add_rule fp prop1 [prop0] (var 0 `TyInt = var 1 `TyInt) |>
+    fun fp -> Fp.add_rule fp prop1 [prop1] (var 0 `TyInt = var 1 `TyInt + (int 5) &&
+                                           (int 0) <= (var 1 `TyInt)) |>
+    fun fp -> Fp.add_rule fp errorprop [prop1] (mk_true srk) |>
+    fun fp -> Fp.add_query fp error
+  in
+  let res = Fp.query_vc_terminates fp pd in
+  Log.errorf "RES IS %a" (Formula.pp srk) res;
+  to_file srk res "/Users/jakesilverman/Documents/non_term.smt2";
+
+  Log.errorf "RES IS %a" (Formula.pp srk) res;
+  assert (1 = 2)
+
+
+
+let test_term_term () =
+  let r0 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt], `TyBool)) in
+  let r1 = mk_symbol srk ~name:"R1" (`TyFun ([`TyInt], `TyBool)) in
+  let error = mk_symbol srk ~name:"Error" `TyBool in
+ 
+  let fp = Fp.empty in
+  let prop0 = Proposition.mk_proposition r0 ["x"] in
+  let prop1 = Proposition.mk_proposition r1 ["y"] in
+  let errorprop = Proposition.mk_proposition error [] in
+  let fp =
+    let open Infix in
+    Fp.add_rule fp prop0 [] (var 0 `TyInt = (int 0)) |> 
+    fun fp -> Fp.add_rule fp prop1 [prop0] (var 0 `TyInt = var 1 `TyInt) |>
+    fun fp -> Fp.add_rule fp prop1 [prop1] (var 0 `TyInt = var 1 `TyInt + (int 5) &&
+                                           (int 0) < (var 1 `TyInt)) |>
+    fun fp -> Fp.add_rule fp errorprop [prop1] (mk_true srk) |>
+    fun fp -> Fp.add_query fp error
+  in
+  let res = Fp.query_vc_terminates fp pd in
+  Log.errorf "RES IS %a" (Formula.pp srk) res;
+  to_file srk res "/Users/jakesilverman/Documents/term.smt2";
+  assert (1 = 2)
+
+
+(*
 let test_init () =
   let fp = Chc.ChcSrkZ3.parse_file srk "/Users/jakesilverman/Documents/arraycopy2.smt2" in
   Log.errorf "Fp is \n%a\n\n\n\n" (Chc.Fp.pp srk) fp;
   assert false
-  
+  *)
   let suite = "Chc" >:::
   [
     (*"test_init" >:: test_init;*)
-    "countup1" >:: countup1;
+    (*"countup1" >:: countup1;
     "counterup2" >:: countup2;
     "xskipcount" >:: xskipcount;
     "countupsuplin" >:: countupsuplin;
     "failure_suplin" >:: (fun _ -> 
         assert_raises 
           (Failure "No methods for solving non super linear chc systems") 
-          failure_suplin);
+          failure_suplin);*)
+    (*"inv_check" >:: inv_check*)
+    "test_term_term" >:: test_term_term;
+    "test_term_non_term" >:: test_term_non_term
+ 
   ]

@@ -1,12 +1,18 @@
 open Srk
 open OUnit
-open Chc
 open Syntax
 open Test_pervasives
-open Pmfa
 open Iteration
 
-let ad = (module OldPmfa.Array_analysis(Product(LinearRecurrenceInequation)(PolyhedronGuard)) : PreDomain)
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
+
+
+
+
+  module AD = Pmfa.OldPmfa.Array_analysis (Iteration.Product(Iteration.LossyTranslation)(Iteration.PolyhedronGuard))
+          (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
+
 
 
 let a4sym = Ctx.mk_symbol ~name:"a4" `TyArr
@@ -15,6 +21,16 @@ let a6sym = Ctx.mk_symbol ~name:"a6" `TyArr
 let a4 = mk_const srk a4sym
 let a5 = mk_const srk a5sym
 let a6 = mk_const srk a6sym
+
+let test_mp =
+  let phi =
+    let open Infix in
+    a1 == a2 && (a2.%[x] = (int 5)) && x' = x + (int 1)
+  in
+  let tf = TransitionFormula.make phi [(xsym, xsym'); (a1sym, a2sym)] in
+  let mp = AD.mp srk tf in
+  Log.errorf "mp is %a" (Formula.pp srk) mp;
+  assert false
 
 
 
@@ -80,22 +96,6 @@ let countupsuplin () =
   Log.errorf "Final fp is\n %a" (Chc.Fp.pp srk) fp;
   assert false*)
 
-let test_offset_partitioning () =
-    let phi =
-    let open Infix in
-    mk_ite srk (a1 == a2) (a3 == a4) ((a3.%[a1.%[x]]<-y) == a5) &&
-    (forall `TyInt (a5.%[var 0 `TyInt] = a6.%[x])) &&
-    (forall `TyInt (a1.%[var 0 `TyInt] = a6.%[var 0 `TyInt]))
-  in
-  let classes = Pmfa.offset_partitioning srk phi in
-  let equiv a b = BatUref.equal (Hashtbl.find classes a) (Hashtbl.find classes b) in
-  assert (equiv a1sym a2sym);
-  assert (equiv a1sym a6sym);
-  assert (equiv a3sym a4sym);
-  assert (equiv a3sym a5sym);
-  assert (not (equiv a1sym a3sym))
-
-
 let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
@@ -104,85 +104,9 @@ let diff t1 t2 s =
   Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
 
 
-
-let test_init () =
-  let enter = time "ENTER INIT" in
-  let fp = Chc.Fp.create () in
-  let fp = Chc.ChcSrkZ3.parse_file srk fp "/Users/jakesilverman/Documents/arraycopy2.smt2" in
-  let parse = time "INIT PARSED" in
-  diff enter parse "PARSED";
-  let fp = Fp.normalize srk fp in
-  Pmfa.skolemize_chc srk fp;
-  let classes, rules_classes = Pmfa.pmfa_chc_offset_partitioning srk fp in
-  let cands = propose_offset_candidates_seahorn srk fp classes in
-  let rule_classes2 = derive_offset_for_each_rule fp cands in
-  apply_offset_candidates srk fp rules_classes rule_classes2;
-  let offset_time = time "POST OFFSETS" in
-  diff parse offset_time "OFFSETS TIME";
-  let _, fp = Chc.Fp.unbooleanize srk fp in
-  let phi = Fp.query_vc_condition srk fp ad in
-  let vc_cond_time = time "VC COND" in
-  diff offset_time vc_cond_time "VC COND TIME";
-  to_file srk phi "/Users/jakesilverman/Documents/duet/duet/vccond.smt2";
-  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
-  let trs = [] in
-  let tf = TransitionFormula.make phi trs in
-  let _, _, _, tf_proj = Pmfa.OldPmfa.projection srk tf in
-  let lia = TransitionFormula.formula (Pmfa.OldPmfa.pmfa_to_lia srk tf_proj) in
-  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/miniscoped.smt2";
-  (*let lia = Quantifier.miniscope srk lia in
-  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/miniscopedpost.smt2";
-  let lia = Quantifier.eq_guided_qe srk lia in
-  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/rewritten_liaNEW.smt2";*)
-  let res = match Quantifier.simsat srk lia with
-    | `Unsat  -> `No
-    | `Unknown -> `Unknown
-    | `Sat -> `Unknown
-  in 
-  let exit = time "EXIT INIT" in
-  diff enter exit "INIT";
-  (if res = `No then Log.errorf "RES IS NO" else if
-     res = `Unknown then Log.errorf "RES IS UKNNOWN" else
-     Log.errorf "RES IS YES");
-  assert (res = `No)
-
-let test_quant () =
-  let exp = SrkZ3.load_smtlib2_file srk "/Users/jakesilverman/Documents/duet/duet/VCCONDJEK.smt2" in
-  let phi' = Quantifier.miniscope srk exp in
-  Log.errorf "phi' is %a" (Formula.pp srk) phi';
-  assert true
-
-
-(*
-let test_init2 () =
-  let phi = Syntax.mk_not srk (Syntax.mk_var srk 0 `TyBool) in
-  let phi = match Syntax.Formula.destruct srk phi with | open_form -> 
-    Syntax.Formula.construct srk open_form in
-  Log.errorf "just var is %a" (Syntax.Formula.pp srk) phi;
-  let phi = Fp.query_vc_condition srk fp ad in
-  let phi = Pmfa.OldPmfa.eliminate_stores srk phi in
-  let tf = TransitionFormula.make phi trs in
-  let _, _, tf_proj = Arraycontent.projection srk tf in
-  let lia = TransitionFormula.formula (Arraycontent.pmfa_to_lia srk tf_proj) in
-  Log.errorf "lia is %a" (Formula.pp srk) lia;
-  let lia = Quantifier.miniscope srk lia in
-  let lia = Quantifier.eq_guided_qe srk lia in
-  to_file srk lia "/Users/jakesilverman/Documents/duet/duet/rewritten_liaNEW.smt2";
-  let res = match Quantifier.simsat srk lia with
-    | `Unsat  -> `No
-    | `Unknown -> `Unknown
-    | `Sat -> `Unknown
-  in 
-  (if res = `No then Log.errorf "RES IS NO" else if
-     res = `Unknown then Log.errorf "RES IS UKNNOWN" else
-     Log.errorf "RES IS YES");
-  assert (res = `No)
-*)
-
-
 let suite = "Pmfa" >:::
   [
-
+    "test_mp" >:: test_mp
     (*"test_offset1" >:: test_offset1;*)
     (*"contupsuplin" >:: countupsuplin;*)
     (*"test_offset_partitioning" >:: test_offset_partitioning;*) 

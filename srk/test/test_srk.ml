@@ -18,16 +18,16 @@ let suite = "Main" >::: [
     Test_exppolynomial.suite;
     Test_apron.suite;
     Test_simplify.suite;*)
-    Test_quantifier.suite;
+    (*Test_quantifier.suite;*)
     (*Test_wedge.suite;
     Test_abstract.suite;
     Test_lts.suite;*)
-    Test_iteration.suite;
+    (*Test_iteration.suite;*)
     (*Test_termination.suite;*)
     (*Test_transition.suite;
     Test_WeightedGraph.suite;*)
-(*    Test_chc.suite;
-    Test_pmfa.suite*)
+    Test_chc.suite;
+    (*Test_pmfa.suite*)
 ]
 
 let _ =
