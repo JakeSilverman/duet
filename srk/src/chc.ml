@@ -1997,7 +1997,8 @@ module Make
       let bottom = Bottom
     end
 
-    let fv_union_analysis fp =
+
+    let wg_of_linchc fp =
       let open WeightedGraph in
       let open Proposition in
       let edge_weights = Hashtbl.create 97 in
@@ -2055,6 +2056,10 @@ module Make
           wg
           edges
       in
+      wg, edge_weights
+
+    let fv_union_analysis fp =
+      let wg, edge_weights = wg_of_linchc fp in
       let update ~pre edge ~post =
         match (PE.open_pathexpr_edge_of edge) with
         | `Edge (src, dst) ->
@@ -2110,39 +2115,93 @@ module Make
 
 
     let coalesce_eqs fp invs =
+      let prop_replacement = Memo.memo (fun sym ->
+          let equivs = invs (int_of_symbol sym) in
+          let num_reduced = List.fold_left (fun count equiv ->
+              assert (BatSet.Int.cardinal equiv > 0); 
+              count + (BatSet.Int.cardinal equiv) - 1)
+              0
+              equivs
+          in
+
+
+          if num_reduced = 0 then None
+          else (
+            let subst = Hashtbl.create 97 in
+            let reps = Hashtbl.create 97 in
+            List.iter (fun equivs ->
+                let rep = BatSet.Int.min_elt equivs in
+                BatSet.Int.iter (fun ele -> Hashtbl.add reps ele rep) equivs
+              )
+              equivs;
+            let new_typ, orig_ind_rep = 
+              match typ_symbol srk sym with
+              | `TyFun (lst, `TyBool) ->
+                BatList.fold_lefti (fun (new_typ, orig_ind_rep) ind typ ->
+                    if typ = `TyInt then (
+                      if Hashtbl.mem subst (Hashtbl.find reps ind) then (
+                        Hashtbl.add subst ind (Hashtbl.find subst (Hashtbl.find reps ind));
+                        new_typ, orig_ind_rep)
+                      else(
+                        Hashtbl.add subst (Hashtbl.find reps ind) (List.length new_typ);
+                        Hashtbl.add subst ind (List.length new_typ);
+                        `TyInt :: new_typ, ind :: orig_ind_rep))
+                    else (
+                      Hashtbl.add subst ind (List.length new_typ);
+                      typ :: new_typ, ind :: orig_ind_rep))
+                  ([], [])
+                  lst
+                |> fun (a, b) -> List.rev a, List.rev b
+              | _ -> assert false
+            in
+            let new_rel_sym = mk_symbol srk ~name:(show_symbol srk sym) (`TyFun (new_typ, `TyBool)) in
+            Some (new_rel_sym, subst, num_reduced, orig_ind_rep)
+          ))
+      in
+
       Fp.map_rules (fun (conc, hypos, constr) ->
           Log.errorf "Rule is %a" (Fp.pp_rule) (conc, hypos, constr);
-          let constr', _ = 
-            List.fold_left (fun (constr, param_counter) prop ->
-
+          let constr', _, props, _ = 
+            List.fold_left (fun (constr, param_counter, props, total_reduced) prop ->
                 let num_params = List.length (Proposition.typ_of_params prop) in
-                let equivs = invs (int_of_symbol prop.symbol) in
-                let subst = Hashtbl.create 97 in
-                List.iter (fun equivs ->
-                    let rep = BatSet.Int.min_elt equivs in
-                    BatSet.Int.iter (fun ele -> Hashtbl.add subst ele rep) equivs
-                  )
-                  equivs;
-                Hashtbl.iter (fun v k -> Log.errorf "Val %n to key %n" v k) subst;
-                Log.errorf "Num params is %n" num_params;
-                let constr = 
-                  substitute
-                    srk
-                    (fun (ind, typ) ->
-                       if typ != `TyInt then mk_var srk ind typ else (
-                         Log.errorf "Looking for param %n minus %n" (ind) param_counter;
+                match prop_replacement prop.symbol with
+                | None ->
+                  let constr = 
+                    substitute
+                      srk
+                      (fun (ind, typ) ->
                          if ind < param_counter
-                         then mk_var srk ind `TyInt
+                         then mk_var srk ind typ
                          else if ind >= param_counter && ind < param_counter + num_params
-                         then mk_var srk ((Hashtbl.find subst (ind - param_counter)) + param_counter) `TyInt
-                         else mk_var srk ind `TyInt))
-                    constr
-                in
-                constr, param_counter + num_params)
-            (constr, 0)
+                         then mk_var srk  (ind - total_reduced) typ
+                         else mk_var srk ind typ)
+                      constr
+                  in
+                  constr, param_counter + num_params, prop :: props, total_reduced 
+                | Some (new_sym, subst, num_reduced, name_map) ->
+                  let names = List.map (fun ind -> List.nth (Proposition.names_of prop) ind) name_map in
+                  let prop = Proposition.mk_proposition new_sym names in
+                  let ind_map = Memo.memo (fun ind -> 
+                      if ind < param_counter then ind
+                      else if ind >= param_counter && ind < param_counter + num_params then (
+                      (Hashtbl.find subst (ind - param_counter)) + param_counter - total_reduced)
+                      else ind)
+                  in
+
+                  let constr = 
+                    substitute
+                      srk
+                      (fun (ind, typ) -> mk_var srk (ind_map ind) typ)
+                      constr
+                  in
+                  constr, param_counter + num_params, prop :: props, total_reduced + num_reduced)
+              (constr, 0,[], 0)
             (conc :: hypos) 
           in
-          conc, hypos, constr')
+          let props_ordered = List.rev props in
+          let conc' = List.hd props_ordered in
+          let hypos' = List.tl props_ordered in
+          conc', hypos', constr')
         fp
 
 
@@ -2198,6 +2257,7 @@ module Make
       Log.errorf "Pre coalese is %a" Fp.pp fp'3;
 
       Log.errorf "POST coalese is %a" Fp.pp fp;
+      assert (1 = 2);
       let fp'3 = fp in
 
 
