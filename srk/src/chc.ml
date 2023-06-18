@@ -2257,7 +2257,6 @@ module Make
       Log.errorf "Pre coalese is %a" Fp.pp fp'3;
 
       Log.errorf "POST coalese is %a" Fp.pp fp;
-      assert (1 = 2);
       let fp'3 = fp in
 
 
