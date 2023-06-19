@@ -2204,11 +2204,8 @@ module Make
           conc', hypos', constr')
         fp
 
-
-
-    let offset_analysis fp =
+    let preprocessing fp =
       let skolemized_vars = BatHashtbl.create 97 in
-      let step1 = time () in
       let fp' = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) ->
 
@@ -2218,12 +2215,10 @@ module Make
             conc, hypo, phi')
           fp
       in
- 
-      let step2b = time () in
 
 
 
-      let step3 = time () in
+
       let fp'' = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) ->
             conc, hypo, pos_bool_elim constr (Hashtbl.find skolemized_vars ind))
@@ -2231,7 +2226,6 @@ module Make
       in
 
 
-      let step4 = time () in
       (* Unskolemize *)
       let fp'3 = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
@@ -2249,18 +2243,6 @@ module Make
       let fp'3 = Fp.filter_rules (fun (_, _, constr) -> constr != mk_false srk) fp'3 in
 
 
-      let invs =  fv_union_analysis fp'3 in
-
-
-
-      let fp = coalesce_eqs fp'3 invs in  
-      Log.errorf "Pre coalese is %a" Fp.pp fp'3;
-
-      Log.errorf "POST coalese is %a" Fp.pp fp;
-      let fp'3 = fp in
-
-
-      let step5 = time () in
       let fp'3 = 
         Fp.map_rules (fun (conc, hypo, constr) ->
             let constr'' = Quantifier.miniscope srk constr in
@@ -2279,6 +2261,21 @@ module Make
       in
 
 
+      let invs =  fv_union_analysis fp'3 in
+
+
+
+      let fp = coalesce_eqs fp'3 invs in  
+      Log.errorf "Pre coalese is %a" Fp.pp fp'3;
+
+      Log.errorf "POST coalese is %a" Fp.pp fp;
+
+      fp
+
+
+    let offset_analysis fp =
+      
+      let fp = preprocessing fp in
       let skolemized_vars = BatHashtbl.create 97 in
 
       let fp = 
@@ -2288,14 +2285,13 @@ module Make
 
             BatHashtbl.add skolemized_vars ind syms;
             conc, hypo, phi')
-          fp'3
+          fp
       in
 
 
       let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
         determine_offsets fp
       in
-      let step2 = time () in
       let fp = 
         apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell 
       in
@@ -2322,15 +2318,6 @@ module Make
             conc, hypo, constr')
           fp
       in
-
-      let step6 = time () in
-
-      diff step1 step2 "1 to 2";
-      diff step1 step2b "1 to 2b";
-      diff step2 step3 "2 to 3"; 
-      diff step3 step4 "3 to 4";
-      diff step4 step5 "4 to 5";
-      diff step5 step6 "5 to 6";
 
       (*let fp'3 =check_q_array_chc fp'3 in*)
   Log.errorf "FP FINAL is %a" (Fp.pp) fp'3;
