@@ -1100,6 +1100,8 @@ module Make
 
 
 
+
+
     (* This functions serves two purposes:
      *
      * First, it partitions the array free variables of the input formula
@@ -1110,7 +1112,7 @@ module Make
      * of integer fv that we might want to use as offset candidates for this cell in
      * this formula. The determination of offset candidates is entirely heuristic.
     *)
-    let local_partiton_and_cands constr _int_fvs_set _ =
+    let local_partiton_and_cands constr int_fvs_set _ =
 
       (* arr_tbl maps each array variables to its cell in the array partitioning;
        * the cell additional carries along a representative (element of the cell)
@@ -1124,11 +1126,11 @@ module Make
        * dir_eqs lets us keep track of free integer variables the are equal and
        * follow the pattern of equalities that we introduce during in chc.ml
        * *)
-      let arr_tbl = Memo.memo (fun a -> BatUref.uref (a, BatSet.Int.empty, false)) in
-      let _int_adj_eqs = BatHashtbl.create 97 in 
-      let _dir_eqs = Memo.memo (fun fv -> BatUref.uref (BatSet.Int.singleton fv)) in
+      let arr_tbl = Memo.memo (fun a -> BatUref.uref (a, [], false)) in
+      let int_adj_eqs = BatHashtbl.create 97 in 
+      let dir_eqs = Memo.memo (fun fv -> BatUref.uref (BatSet.Int.singleton fv)) in
 
-      let _int_varset_of_term term =
+      let int_varset_of_term term =
         let varset = 
           BatHashtbl.fold (fun fv typ varset ->
               if typ = `TyInt then VarSet.add (Fv fv) varset else varset)
@@ -1149,13 +1151,8 @@ module Make
         | `Select (a, i) ->
           let a = ArrTerm.eval srk arr_term_alg a in
           let a_c, varsets, _ = BatUref.uget (arr_tbl a) in
-          let int_vars = Hashtbl.fold (fun ind typ inds ->
-              if typ = `TyInt then BatSet.Int.add ind inds else inds) 
-              (free_vars i)
-              BatSet.Int.empty
-          in
-          BatUref.uset (arr_tbl a) (a_c, BatSet.Int.union int_vars varsets, true)
-          (*populate_tbls_from_arith i *)
+          BatUref.uset (arr_tbl a) (a_c, (int_varset_of_term i) :: varsets, true);
+          populate_tbls_from_arith i 
       and populate_tbls_from_phi phi =
         match Formula.destruct srk phi with
         | `Tru | `Fls | `Proposition _ -> ()
@@ -1170,8 +1167,8 @@ module Make
           if has_arrays s || has_arrays t then ( 
             populate_tbls_from_arith s;
             populate_tbls_from_arith t)
-          else ()
-         (*   let int_vars = VarSet.union (int_varset_of_term s)  (int_varset_of_term t) in
+          else (
+            let int_vars = VarSet.union (int_varset_of_term s)  (int_varset_of_term t) in
             VarSet.iter (fun var -> 
                 BatHashtbl.modify_def
                   (VarSet.singleton var)
@@ -1183,15 +1180,15 @@ module Make
             | `Var (i1, `TyInt) , `Var (i2, `TyInt)  ->
               let sel = BatSet.Int.union in
               BatUref.unite ~sel (dir_eqs i1) (dir_eqs i2)
-            | _ -> ())*)
+            | _ -> ())
         | `Atom (`Arith (_, s, t)) -> List.iter populate_tbls_from_arith [s; t]
         | `Atom (`ArrEq (a, b)) ->
           let a = ArrTerm.eval srk arr_term_alg a in
           let b = ArrTerm.eval srk arr_term_alg b in
           let sel (a_c, a_vars, a_rw) (b_c, b_vars, b_rw) = 
             match a_c with
-            | Fv _ -> a_c, BatSet.Int.union a_vars  b_vars, a_rw || b_rw
-            | Sym _ -> b_c, BatSet.Int.union a_vars b_vars, a_rw || b_rw
+            | Fv _ -> a_c, (a_vars @ b_vars), a_rw || b_rw
+            | Sym _ -> b_c, (a_vars @ b_vars), a_rw || b_rw
           in
           BatUref.unite ~sel (arr_tbl a) (arr_tbl b)
         | `Atom (`IsInt _)
@@ -1200,13 +1197,8 @@ module Make
         | `App (sym, []) -> Sym sym 
         | `Ite _ -> assert false 
         | `Store (arr, i, v) ->
-          let int_vars = Hashtbl.fold (fun ind typ inds ->
-              if typ = `TyInt then BatSet.Int.add ind inds else inds) 
-              (free_vars i)
-              BatSet.Int.empty
-          in
           let a_c, varsets, _ = BatUref.uget (arr_tbl arr) in
-          BatUref.uset (arr_tbl arr) (a_c, BatSet.Int.union varsets int_vars, true);
+          BatUref.uset (arr_tbl arr) (a_c, (int_varset_of_term i) :: varsets, true);
           populate_tbls_from_arith i;
           populate_tbls_from_arith v;
           arr
@@ -1239,7 +1231,7 @@ module Make
             assert false in
             Log.errorf "unwrapped class is %n\n\n" unwrapped_class;
             Log.errorf "Size is %n" (List.length rwvs);*)
-          (*let cands =
+          let cands =
             BatList.fold_left (fun cands rw_vars ->
 
                 let adj_fvs var =
@@ -1268,14 +1260,13 @@ module Make
                 BatSet.Int.inter cands inter_with)
               int_fvs_set
               rwvs
-          in*)
-          let cands = rwvs in
+          in
           BatHashtbl.add arr_fv_class_and_cands var (arr_class, cands, has))
         arr_varset;
       arr_fv_class_and_cands
 
 
-    (* Replace this function in unbooleanize then delete *)
+   (* Replace this function in unbooleanize then delete *)
     let skolemize phi =
       let decapture_tbl = BatHashtbl.create 97 in
       let subst = 
