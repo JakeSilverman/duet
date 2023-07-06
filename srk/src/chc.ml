@@ -1537,7 +1537,7 @@ module Make
                 offsets)
           array_cells
       in
-      BatHashtbl.iter (fun (rule_num, _) (offsetcands, _syms) ->
+      (*BatHashtbl.iter (fun (rule_num, _) (offsetcands, _syms) ->
           Log.errorf "IN INTERESTING PHASE";
           let _subchc = 
             Fp.filteri_rules (fun ind _ -> ind = rule_num) fp
@@ -1549,7 +1549,7 @@ module Make
             offsetcands;
           assert ( 1 = 2);
           ())
-        local_offsets;
+        local_offsets;*)
       cell_to_offset, chcvar_to_cell, sym_to_cell
 
 
@@ -1654,28 +1654,29 @@ module Make
       and apply_offset_arith = function
         | `Select (a, term) ->
           let a, offset = ArrTerm.eval srk apply_offset_arr a in
-          let offset = Option.get offset in
-          (* look into getting rid of div by char size *)
-          mk_select 
-            srk 
-            a 
-            (*(mk_floor srk (mk_div srk (mk_sub srk term (mk_var srk offset `TyInt)) (mk_int srk 4)))*)
-            (mk_sub srk term (mk_var srk offset `TyInt))
+          let sel_term = match offset with
+             | None -> term
+             | Some offset -> 
+                             match offset with None -> term | Some offset -> (mk_sub srk term (mk_var srk offset `TyInt))
+          in
+          mk_select srk a sel_term
         | `Ite _ -> assert false
         | open_term -> ArithTerm.construct srk open_term
       and apply_offset_arr = function
         | `App (sym, []) ->
-          mk_const srk sym, (Hashtbl.find offsets (Sym sym))
+          mk_const srk sym, (BatHashtbl.find_option offsets (Sym sym))
         | `Var (ind, typ) ->
           Log.errorf "Need offset for var %n" ind;
-          mk_var srk ind (typ :> typ_fo), (Hashtbl.find offsets (Fv ind))
+          mk_var srk ind (typ :> typ_fo), (BatHashtbl.find_option offsets (Fv ind))
         | `Store ((a, offset), i, v) ->
-          let unwrapped_offset = Option.get offset in
           let i = ArithTerm.eval srk apply_offset_arith i in
           (* Look into getting rid of div by char size *)
           let i_offset = 
-            (*mk_floor srk (mk_div srk (mk_sub srk i (mk_var srk unwrapped_offset `TyInt)) (mk_int srk 4))*)
-            (mk_sub srk i (mk_var srk unwrapped_offset `TyInt))
+            match offset with
+             | None -> i
+             | Some offset -> match offset with
+             | None -> i
+             | Some offset -> (mk_sub srk i (mk_var srk offset `TyInt))
           in
           let v = ArithTerm.eval srk apply_offset_arith v in
           mk_store srk a i_offset v, offset
