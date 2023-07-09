@@ -869,7 +869,7 @@ module OldPmfa = struct
        skolems
       }
      
-   (* let at_most_single_write srk write noop trs =
+    let at_most_single_write srk write noop trs =
       let exp = mk_symbol srk ~name:"exp" `TyInt in
 
       let noop_star =
@@ -893,10 +893,10 @@ module OldPmfa = struct
       | `Sat -> false
       | `Unsat -> true
       | `Unknown -> failwith "at most single unknown"
-*)
+
  
-    let at_most_single_write _ _ _ _ =
-      true
+    (*let at_most_single_write _ _ _ _ =
+      true*)
 
 
     let exp srk _ lc obj =
@@ -933,10 +933,12 @@ module OldPmfa = struct
         rewrite srk ~down:(nnf_rewriter srk) noop
       in
       
-
+      Log.errorf "write is %a" (Formula.pp srk) write;
       let exists s = not (Symbol.Set.mem s obj.skolems) in
       let write = T.make ~exists write obj.iter_trs in
       let noop = T.make ~exists noop obj.iter_trs in
+      let indiff = T.make ~exists obj.ground_lia obj.iter_trs in
+ 
       let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
       let exp2 = mk_symbol srk ~name:"exp2" `TyInt in
 
@@ -997,7 +999,25 @@ module OldPmfa = struct
                (T.formula write_once); 
              lc_constr]
         )
-        else assert false
+        else (
+          let iter =
+             T.make
+              (Iter.exp
+                 srk 
+                 obj.iter_trs 
+                 (mk_const 
+                    srk 
+                    exp1)
+                 (Iter.abstract 
+                    srk 
+          indiff))
+              obj.iter_trs
+          in
+            mk_exists_consts 
+               srk
+               (fun s -> (exists s) && not (s = exp1))
+               (T.formula iter)
+              )
       in
 
       let nstar = time "nstar" in
