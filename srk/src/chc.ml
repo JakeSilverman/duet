@@ -320,7 +320,7 @@ module Make
       | `Mul (edge1, edge2) -> mul edge1 edge2
       | `Add (edge1, edge2) -> add edge1 edge2
       | `Star (edge) -> star pd edge
-      | `Zero -> assert false
+      | `Zero -> Edge ([], [], mk_false srk)
       | `One -> assert false
       | `Segment _ -> assert false
 
@@ -2292,12 +2292,16 @@ module Make
       in
 
 
-      let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
-        determine_offsets fp
-      in
-      let fp = 
-        apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell 
-      in
+      let fp =
+        try
+           let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
+              determine_offsets fp
+           in
+           let fp = 
+               apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell 
+           in
+           fp
+        with _ -> fp in
 
 
 
