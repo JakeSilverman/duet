@@ -2676,6 +2676,7 @@ let get_subst_candidate srk eqs qt_infos =
   else Some (List.hd candidates)
 
 let eq_guided_qe_new srk phi =
+  Log.errorf "ENTER EQ GUIDED";
   let phi = Syntax.eliminate_ite srk phi in
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2694,7 +2695,7 @@ let eq_guided_qe_new srk phi =
             else mk_var srk ind typ)
           phi
       in
-      let perform_bool_substs =
+      let _perform_bool_substs =
         BatList.fold_lefti (fun (eqs, diseqs, phi) ind (_, typ) ->
             let sub_pairs lst term = 
               List.map
@@ -2724,9 +2725,9 @@ let eq_guided_qe_new srk phi =
           (eqs, diseqs, phi)
           qt_infos
       in
-      let eqs, diseqs, phi = 
+      (*let eqs, diseqs, phi = 
         if qtyp = `Exists then perform_bool_substs else eqs, diseqs, phi
-      in
+      in*)
       let fv_tru' = BatSet.Int.map (fun s -> s - (List.length qt_infos)) fv_tru in
       let fv_fls' = BatSet.Int.map (fun s -> s - (List.length qt_infos)) fv_fls in
 
@@ -2765,6 +2766,7 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs_filt in
           eqs', diseqs', fv_tru', fv_fls', phi' 
         | Some (ind, term) ->
+          Log.errorf "Subst ind %n with term %a" ind (Expr.pp srk) term;
           (* mk_false should never be substitutable here *)
           let term' = subst term ind (mk_false srk) in
           let sub_pairs lst = 
@@ -2776,6 +2778,8 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
           let phi' = subst phi ind term' in
+          Log.errorf "OG WAS %a" (Formula.pp srk) phi;
+          Log.errorf "RESULT IS %a" (Formula.pp srk) phi';
           perform_subst
             cands'
             (BatList.remove_at ind qt_infos)
@@ -2995,13 +2999,14 @@ let eq_guided_qe_helper srk phi =
     term
   in
 
-  let find_subst typ eqs diseqs fv_tru fv_fls  =
+  let find_subst qtyp typ eqs diseqs fv_tru fv_fls  =
     let fv_tru' = BatSet.Int.map (fun s -> s - 1) fv_tru in
     let fv_fls' = BatSet.Int.map (fun s -> s - 1) fv_fls in
     (* This is incorrect for forall bools *)
     let replacement =
-      match typ with
-      | `TyBool ->
+      match typ, qtyp with
+      | _, `Forall -> None
+      | `TyBool, _ -> 
         if BatSet.Int.mem 0 fv_tru &&
            not (BatSet.Int.mem 0 fv_fls) then (
           Some (mk_true srk :> ('a, typ_fo) expr ))
@@ -3090,7 +3095,7 @@ let eq_guided_qe_helper srk phi =
        in
        intersect eqs, union diseqs, fv_trus, fv_flss, `Dis disjs
     | `Quantify (qtyp, name, typ, (eqs, diseqs, fv_tru, fv_fls, phi)) ->
-      let replacement, eqs', diseqs', fv_tru', fv_fls' = find_subst typ eqs diseqs fv_tru fv_fls in
+      let replacement, eqs', diseqs', fv_tru', fv_fls' = find_subst qtyp typ eqs diseqs fv_tru fv_fls in
       eqs', diseqs', fv_tru', fv_fls', `Quant (replacement, qtyp, name, typ, phi)
     | `Not (eqs, diseqs, fv_trus, fv_flss, phi) -> 
      diseqs, eqs, fv_flss, fv_trus, `Not phi

@@ -1688,7 +1688,7 @@ module Make
       Formula.eval srk apply_offset_formula constr
 
 
-    let apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell =
+    let _apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell =
       Fp.map_rules (fun (conc, hypo, constr) ->
           let fvs_of = BatHashtbl.create 97 in
           iter_fvs (fun fv rel param -> 
@@ -2254,11 +2254,7 @@ module Make
                 srk
                 constr''
             in
-
             let constr' = Quantifier.eq_guided_elim_loop srk constr' in
-
-
-
             conc, hypo, constr')
           fp'3
       in
@@ -2278,57 +2274,7 @@ module Make
 
     let offset_analysis fp =
       
-      let fp = preprocessing fp in
-      let skolemized_vars = BatHashtbl.create 97 in
-
-      let fp = 
-        Fp.mapi_rules (fun ind (conc, hypo, constr) ->
-
-            let phi', syms = skolemize_eh 0 constr in
-
-            BatHashtbl.add skolemized_vars ind syms;
-            conc, hypo, phi')
-          fp
-      in
-
-
-      let fp =
-        try
-           let cell_to_offsets, chcvar_to_cell, sym_to_cell = 
-              determine_offsets fp
-           in
-           let fp = 
-               apply_offset_candidates_new fp cell_to_offsets chcvar_to_cell sym_to_cell 
-           in
-           fp
-        with _ -> fp in
-
-
-
-
-      let fp = 
-        Fp.mapi_rules (fun ind (conc, hypo, constr) ->
-            conc, hypo, pos_bool_elim constr (Hashtbl.find skolemized_vars ind))
-          fp
-      in
-
-      (* Unskolemize *)
-      let fp'3 = 
-        Fp.mapi_rules (fun ind (conc, hypo, constr) -> 
-            let constr' =
-              mk_exists_consts
-                srk
-                (fun sym -> not (Symbol.Set.mem sym (BatHashtbl.find skolemized_vars ind)))
-                constr
-            in
-
-            conc, hypo, constr')
-          fp
-      in
-
-      (*let fp'3 =check_q_array_chc fp'3 in*)
-  Log.errorf "FP FINAL is %a" (Fp.pp) fp'3;
- 
+      let fp'3 = preprocessing fp in
       fp'3
   end
 end
