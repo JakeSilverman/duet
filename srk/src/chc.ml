@@ -2208,6 +2208,8 @@ module Make
         fp
 
     let preprocessing fp =
+
+      Log.errorf "ORIG FP is %a" Fp.pp fp;
       let skolemized_vars = BatHashtbl.create 97 in
       let fp' = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) ->
@@ -2264,10 +2266,10 @@ module Make
 
 
 
-      let fp = coalesce_eqs fp'3 invs in  
-      Log.errorf "Pre coalese is %a" Fp.pp fp'3;
+      let fp = coalesce_eqs fp'3 invs in 
 
-      Log.errorf "POST coalese is %a" Fp.pp fp;
+      Log.errorf "\n\n\n\n\n\nn\n\\nn\n\n\n\n\n\n\n\n\n\n\n\n\n";
+      Log.errorf "NEW FP is %a" Fp.pp fp;
 
       fp
 

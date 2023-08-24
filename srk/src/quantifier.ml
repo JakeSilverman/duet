@@ -2676,7 +2676,6 @@ let get_subst_candidate srk eqs qt_infos =
   else Some (List.hd candidates)
 
 let eq_guided_qe_new srk phi =
-  Log.errorf "ENTER EQ GUIDED";
   let phi = Syntax.eliminate_ite srk phi in
   let intersect _ = [] in
   let union lsts = List.flatten lsts in
@@ -2986,6 +2985,7 @@ let normalized_intersection srk lsts =
 
 
 let eq_guided_qe_helper srk phi =
+  Log.errorf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
   let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
   let intersect lsts = normalized_intersection srk lsts in
@@ -3006,7 +3006,8 @@ let eq_guided_qe_helper srk phi =
     let replacement =
       match typ, qtyp with
       (*| _, `Forall -> None*)
-      | `TyBool, _ -> 
+      | `TyBool, `Forall -> None
+      | `TyBool, _ ->
         if BatSet.Int.mem 0 fv_tru &&
            not (BatSet.Int.mem 0 fv_fls) then (
           Some (mk_true srk :> ('a, typ_fo) expr ))
@@ -3249,7 +3250,21 @@ let instantiate_first_bool srk phi =
               phi'
           in
           mk_or srk [lhs; rhs]
-        | `Forall, `TyBool -> assert false
+        | `Forall, `TyBool -> 
+          changed := true;
+          let lhs = 
+            substitute
+              srk
+              (fun (ind, typ) -> if ind = 0 then mk_true srk else mk_var srk (ind - 1) typ)
+              phi'
+          in
+          let rhs = 
+            substitute
+              srk
+              (fun (ind, typ) -> if ind = 0 then mk_false srk else mk_var srk (ind - 1) typ)
+              phi'
+          in
+          mk_and srk [lhs; rhs]
         | `Exists, _ -> mk_exists srk ~name typ (helper phi')
         | `Forall, _ -> mk_forall srk ~name typ (helper phi')
       end
@@ -3262,8 +3277,8 @@ let instantiate_first_bool srk phi =
     | `Fls -> mk_false srk
     | open_term -> Formula.construct srk open_term
   in
-  let phi = helper phi in
-  phi, !changed
+  let phi' = helper phi in
+  phi', !changed
 
 let eq_guided_elim_loop srk phi =
   let rec helper phi count =
@@ -3276,7 +3291,6 @@ let eq_guided_elim_loop srk phi =
     if changed then helper phi (count + 1) 
     else (
       let phi, changed2 = instantiate_first_bool srk phi in
-      Log.errorf "CHANGED is %b" changed;
       if changed2 then helper phi (count + 1) else phi)
   in
   helper phi 0
