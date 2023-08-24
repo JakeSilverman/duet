@@ -308,7 +308,8 @@ module Make
             (fun fv -> syms fv)
             phi'
         in
-
+        let phi' = Quantifier.eq_guided_elim_loop srk phi' in
+        Log.errorf "PHI' is %a" (Formula.pp srk) phi';
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
         if t3 -. t1 > 100.1 then assert false else ();
@@ -2066,7 +2067,6 @@ module Make
       let update ~pre edge ~post =
         match (PE.open_pathexpr_edge_of edge) with
         | `Edge (src, dst) ->
-          Log.errorf "ENTERING UPDATE For edge %n to %n" src dst;
           let weights = Hashtbl.find edge_weights (src, dst) in
           let p_conc = let (conc, _, _) = List.hd weights in (Proposition.typ_of_params conc) in
 
@@ -2077,30 +2077,13 @@ module Make
                  mk_var srk (ind + (List.length p_conc)) typ)
               (EQDom.formula_of pre)
           in
-          Log.errorf "FORM OF PRE is %a" (Formula.pp srk) pre';
           let phi =
             let edge = List.map (fun (_, _, constr) -> constr) weights in
             mk_and srk [pre'; mk_or srk edge]
           in
           let fvs = BatList.filteri_map (fun ind typ -> 
               if typ = `TyInt then Some ind else None) p_conc |> BatSet.Int.of_list in
-          BatSet.Int.iter (fun fv -> Log.errorf "Reasoning about fv %n" fv) fvs; 
-          Log.errorf "CONSTR IS %a" (Formula.pp srk) phi;
           let post' = EQDom.abstract phi fvs in
-          let pp_int_set_list sl =
-            match sl with 
-            | EQDom.Bottom -> Log.errorf "IS BOTTOM"
-            | Classes sl ->          
-              Log.errorf "Printing list of int sets";
-              List.iter (fun s1 -> Log.errorf "Set is";
-                          BatSet.Int.iter (fun ele -> Log.errorf "Contains %n" ele) s1)
-                sl
-          in
-          Log.errorf "NOW IS";
-          pp_int_set_list post';
-          Log.errorf "WAS";
-          pp_int_set_list post;
-          Log.errorf "EQUAL %b" (EQDom.equal (EQDom.join post' post) post);
           if EQDom.equal (EQDom.join post' post) post then None else Some (EQDom.join post' post)
         | _ -> assert false
       in
@@ -2270,7 +2253,6 @@ module Make
 
       Log.errorf "\n\n\n\n\n\nn\n\\nn\n\n\n\n\n\n\n\n\n\n\n\n\n";
       Log.errorf "NEW FP is %a" Fp.pp fp;
-
       fp
 
 
