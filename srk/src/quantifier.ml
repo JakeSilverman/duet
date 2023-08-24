@@ -3005,7 +3005,7 @@ let eq_guided_qe_helper srk phi =
     (* This is incorrect for forall bools *)
     let replacement =
       match typ, qtyp with
-      | _, `Forall -> None
+      (*| _, `Forall -> None*)
       | `TyBool, _ -> 
         if BatSet.Int.mem 0 fv_tru &&
            not (BatSet.Int.mem 0 fv_fls) then (
@@ -3228,15 +3228,56 @@ let dumb_factor srk  phi =
   phiize (Formula.eval srk alg phi)
 
 
+let instantiate_first_bool srk phi =
+  let changed = ref false in
+  let rec helper phi =
+    match Formula.destruct srk phi with
+    | `Quantify (qtyp, name, typ, phi') ->
+      begin match qtyp, typ with
+        | `Exists, `TyBool ->
+          changed := true;
+          let lhs = 
+            substitute
+              srk
+              (fun (ind, typ) -> if ind = 0 then mk_true srk else mk_var srk (ind - 1) typ)
+              phi'
+          in
+          let rhs = 
+            substitute
+              srk
+              (fun (ind, typ) -> if ind = 0 then mk_false srk else mk_var srk (ind - 1) typ)
+              phi'
+          in
+          mk_or srk [lhs; rhs]
+        | `Forall, `TyBool -> assert false
+        | `Exists, _ -> mk_exists srk ~name typ (helper phi')
+        | `Forall, _ -> mk_forall srk ~name typ (helper phi')
+      end
+    | `Not a -> mk_not srk (helper a)
+    | `And lst -> mk_and srk (List.map helper lst)
+    | `Or lst -> mk_or srk (List.map helper lst)
+    | `Ite _ -> assert false
+    | `Atom a -> Formula.construct srk (`Atom a)
+    | `Tru -> mk_true srk
+    | `Fls -> mk_false srk
+    | open_term -> Formula.construct srk open_term
+  in
+  let phi = helper phi in
+  phi, !changed
+
 let eq_guided_elim_loop srk phi =
   let rec helper phi count =
-    assert (count <= 10);
+    assert (count <= 100);
     let phi = miniscope srk phi in
     let phi = dumb_factor srk phi in
     let phi = miniscope srk phi in
 
     let phi, changed = eq_guided_qe_helper srk phi in
-    if changed then helper phi (count + 1) else phi
+    if changed then helper phi (count + 1) 
+    else (
+      let phi, changed2 = instantiate_first_bool srk phi in
+      Log.errorf "CHANGED is %b" changed;
+      if changed2 then helper phi (count + 1) else phi)
   in
   helper phi 0
 
@@ -3250,6 +3291,7 @@ let eq_guided_elim_mini_loop srk phi =
     if changed then helper phi (count + 1) else phi
   in
   helper phi 0
+
 
 
 
