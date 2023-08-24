@@ -924,7 +924,7 @@ module OldPmfa = struct
              polka 
              write) 
       in
-      let write = conv in
+      let _write = conv in
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
 
