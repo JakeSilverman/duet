@@ -3311,10 +3311,11 @@ let simplify_eq_arith srk phi =
       List.iter (fun (_, info) ->
           let term, sym_simp, op = Option.get info in
           if Hashtbl.mem seen (QQVector.scalar_mul (QQ.negate QQ.one) sym_simp) then (
-            (*Hashtbl.add terms term `Eq;*)
+            Hashtbl.add terms term `Eq;
             Hashtbl.add terms term op;
             Hashtbl.add seen sym_simp true)
-          else Hashtbl.add seen sym_simp true)
+          else (Hashtbl.add seen sym_simp true;
+               Hashtbl.add terms term op))
         norm_terms;
       let terms = 
         List.map (fun (term, op) -> mk_compare op srk term (mk_zero srk))
