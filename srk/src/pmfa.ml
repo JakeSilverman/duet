@@ -7,8 +7,8 @@ let time _ =
   let t = Unix.gettimeofday () in
   (*Log.errorf "\n%s Curr time: %fs\n" s (t);*) t
 
-let diff _t1 _t2 _s = 
-  (*Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)*) ()
+let diff t1 t2 s = 
+  Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
 
 let typ_symbol_fo srk sym =
     match typ_symbol srk sym with
@@ -249,10 +249,12 @@ module OldPmfa = struct
      * at the head of the lia formula *)
     let nuqr_syms = ref Symbol.Set.empty in
     let func_consist_reqs : ('a arr_term, 'a arith_term) Hashtbl.t = Hashtbl.create 100 in
+    let arr_usage_counts = Hashtbl.create 100 in
     (* Maps the term a[i] to an integer symbol where i is not the universally
      * quantified var *)
     let non_uq_read : 'c * 'd -> 'a arith_term =
-      Memo.memo (fun (arr, read) -> 
+      Memo.memo (fun (arr, read) ->
+          BatHashtbl.modify_def 0 arr (fun s -> s + 1) arr_usage_counts;
           Hashtbl.add func_consist_reqs arr read;
           let sym = mk_symbol srk ~name:"NON_EQ_RE" `TyInt in
           nuqr_syms := Symbol.Set.add sym !nuqr_syms;
@@ -280,6 +282,25 @@ module OldPmfa = struct
       | open_formula -> Formula.construct srk open_formula
     in
     let reads_replaced = Formula.eval srk formalg body in
+    BatHashtbl.filter_inplace (fun num -> num = 2) arr_usage_counts;
+    (* TODO: verify - is this correct?... esp in case num =1 *)
+    let opt_fc_clauses =
+      List.map (fun (arr, num) ->
+          if num = 2 then (
+            let a, b = 
+              match BatHashtbl.find_all func_consist_reqs arr with
+              | [a; b] -> a, b
+              | _ -> assert false
+            in
+            BatHashtbl.remove_all func_consist_reqs arr;
+            mk_if 
+              srk
+              (mk_eq srk a b)
+              (mk_eq srk (non_uq_read (arr, a)) (non_uq_read (arr, b)))
+          )
+          else assert false)
+        (BatHashtbl.to_list arr_usage_counts)
+    in
     let functional_consistency_clauses =
       List.map (fun (arr, read) ->
           mk_if 
@@ -293,6 +314,8 @@ module OldPmfa = struct
       mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !uqr_syms)) matrix 
     in
     let phi' = mk_forall_const srk uq_sym phi' in
+    let phi' = mk_and srk (phi' :: opt_fc_clauses) in
+    Log.errorf "OPT PHI here is %a" (Formula.pp srk) phi';
     let phi' = mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi' in
     phi', !nuqr_syms
 
@@ -620,6 +643,19 @@ module OldPmfa = struct
         | `Atom (`Arith (`Eq, a, b)) ->
           begin match ArithTerm.destruct srk a, ArithTerm.destruct srk b with
             | `App (a, []), `App (b, []) -> [(a, b)]
+            | `Real z, `Add [ele1; ele2]
+            | `Add [ele1; ele2], `Real z  ->
+              if z = QQ.zero then
+                begin match ArithTerm.destruct srk ele1, ArithTerm.destruct srk ele2 with
+                  | `Unop (`Neg, a), `App (b, [])
+                  | `App (b, []), `Unop (`Neg, a) ->
+                    begin match ArithTerm.destruct srk a with
+                      | `App (a, []) -> [(a, b)]
+                      | _ -> []
+                    end
+                  | _ -> []
+                end
+              else []
             | _ -> []
           end
         | `And conjuncts -> List.fold_left List.append [] conjuncts
@@ -730,26 +766,6 @@ module OldPmfa = struct
       Formula.eval srk alg phi
 
 
-(*
-    let squash_eq_adds srk phi =
-      let squash_add term =
-        begin match ArithTerm.destruct srk term with
-        | `Add [a; b] ->
-          begin match ArithTerm.destruct srk a, ArithTerm.destruct srk b with
-            | `Unop (`Neg, a_d), _ -> if a_d = b then mk_zero srk else term
-            | _, `Unop (`Neg, b_d) -> if a = b_d then mk_zero srk else term
-            | _, _ -> term
-          end
-        | _ -> term
-        end
-      in
-      let alg = function
-        | `Atom (`Arith (`Eq, a, b)) -> mk_eq srk (squash_add a) (squash_add b)
-        | open_phi -> Formula.construct srk open_phi
-      in
-      Formula.eval srk alg phi
-*)
-
 
     let abstract srk tf =
       let t1 = time "In abstract" in
@@ -770,6 +786,7 @@ module OldPmfa = struct
           eqs
     in
 
+    Log.errorf "FORMULA AT START IS %a" (Formula.pp srk) (T.formula tf);
     let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then (
@@ -804,8 +821,12 @@ module OldPmfa = struct
         (T.formula tf)
     in
 
-
     let phi = squash_eq_adds srk phi in
+    Log.errorf "Phi now is %a" (Formula.pp srk) phi;
+    
+
+
+
     let phi = Quantifier.miniscope srk phi in
 
 
@@ -836,9 +857,10 @@ module OldPmfa = struct
         in*)
 
 
-
+    Log.errorf "INIT FORMULA is %a" (Formula.pp srk) (T.formula tf);
+    Log.errorf "FORMULA PRIOR TO CALL IS %a" (Formula.pp srk) (T.formula tf_proj);
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
-
+    Log.errorf "PMFA TO LIA CALLED HERE";
 
     let lia = 
       Quantifier.eq_guided_qe 
@@ -846,9 +868,13 @@ module OldPmfa = struct
         (Quantifier.miniscope srk lia)
     in
 
+
+    Log.errorf "Phi in abstract is %a" (Formula.pp srk) lia;
+
+
     let lia, skolems = skolemize_eh_alt srk lia in 
     let lia = Quantifier.miniscope srk lia in
- 
+    Log.errorf "NOW IS %a" (Formula.pp srk) lia;
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
 
 
