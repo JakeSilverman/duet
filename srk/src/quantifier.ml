@@ -3306,21 +3306,38 @@ let simplify_eq_arith srk phi =
       let norm_juncts = List.map form_destructor lst in
       let nt, norm_terms = BatList.partition (fun (_, info) -> Option.is_none info) norm_juncts in
       let nt = List.map (fun (junct, _) -> junct) nt in
-      let seen = Hashtbl.create 99 in
       let terms = Hashtbl.create 99 in
+      let is_false = ref false in
       List.iter (fun (_, info) ->
-          let term, sym_simp, op = Option.get info in
-          if Hashtbl.mem seen (QQVector.scalar_mul (QQ.negate QQ.one) sym_simp) then (
-            Hashtbl.add terms term `Eq;
-            Hashtbl.add terms term op;
-            Hashtbl.add seen sym_simp true)
-          else (Hashtbl.add seen sym_simp true;
-               Hashtbl.add terms term op))
+          let term, inv, op = Option.get info in
+          begin match BatHashtbl.find_option terms term, BatHashtbl.find_option terms inv with
+          | Some `Eq, _ -> ()
+          | Some `Leq, Some _ -> assert false
+          | Some `Leq, None ->
+            if op = `Lt then BatHashtbl.replace terms term op
+          | Some `Lt, _ -> ()
+          | None, Some `Lt -> is_false := true;
+          | None, Some `Eq -> assert false
+          | None, Some `Leq ->
+            begin match op with
+              | `Leq | `Eq ->
+                BatHashtbl.replace terms term `Eq;
+                BatHashtbl.replace terms inv `Eq
+              | `Lt -> is_false := true;
+            end
+          | None, None -> 
+            if op = `Eq then (
+              BatHashtbl.add terms term op;
+              BatHashtbl.add terms inv op;)
+            else BatHashtbl.add terms term op
+          end)
         norm_terms;
       let terms = 
         List.map (fun (term, op) -> mk_compare op srk term (mk_zero srk))
           (BatHashtbl.to_list terms)
       in
+      if !is_false then assert false;
+      if !is_false then (mk_false srk, None) else
         mk_and srk (nt @ terms), None
  
     | `Or lst ->
@@ -3336,7 +3353,12 @@ let simplify_eq_arith srk phi =
     | `Ite _ -> assert false
     | `Atom (`Arith(op, a, b)) -> 
       let term = mk_add srk [to_numerical a; mk_neg srk (to_numerical b)] in
-      let simp = Linear.of_linterm srk (Linear.linterm_of srk term) in
+      let vec = Linear.linterm_of srk term in
+      let simp = Linear.of_linterm srk vec in
+      let inv = 
+        Linear.of_linterm srk (QQVector.scalar_mul (QQ.negate QQ.one) vec)
+      in
+
       let simp' =
         substitute_const
           srk
@@ -3345,7 +3367,15 @@ let simplify_eq_arith srk phi =
              else mk_const srk sym)
           simp
       in
-      (mk_compare op srk simp' (mk_zero srk), Some (simp', Linear.linterm_of srk term, op))
+      let inv' =
+        substitute_const
+          srk
+          (fun sym ->
+             if Hashtbl.mem term_of sym then Hashtbl.find term_of sym
+             else mk_const srk sym)
+          inv
+      in
+      (mk_compare op srk simp' (mk_zero srk), Some (simp', inv', op))
     | _ -> phi, None
   in
   fst (form_destructor phi)
