@@ -282,7 +282,7 @@ module OldPmfa = struct
       | open_formula -> Formula.construct srk open_formula
     in
     let reads_replaced = Formula.eval srk formalg body in
-    BatHashtbl.filter_inplace (fun num -> num = 2) arr_usage_counts;
+    (*BatHashtbl.filter_inplace (fun num -> num = 2) arr_usage_counts;
     (* TODO: verify - is this correct?... esp in case num =1 *)
     let opt_fc_clauses =
       List.map (fun (arr, num) ->
@@ -300,22 +300,30 @@ module OldPmfa = struct
           )
           else assert false)
         (BatHashtbl.to_list arr_usage_counts)
-    in
+    in*)
     let functional_consistency_clauses =
+      match BatHashtbl.to_list func_consist_reqs with
+      | [(arr1, read1); (arr2, read2)] ->
+        let fc = 
+          mk_if
+            srk
+            (mk_eq srk read1 read2)
+            (mk_eq srk (non_uq_read (arr1, read1)) (non_uq_read (arr2, read2)))
+        in
+        [fc]
+      | lst ->
       List.map (fun (arr, read) ->
           mk_if 
             srk 
             (mk_eq srk uq_term read)
             (mk_eq srk (mk_const srk (uq_read arr)) (non_uq_read (arr, read))))
-        (BatHashtbl.to_list func_consist_reqs)
+        lst
     in
     let matrix = mk_and srk (reads_replaced :: functional_consistency_clauses) in
     let phi' = 
       mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !uqr_syms)) matrix 
     in
     let phi' = mk_forall_const srk uq_sym phi' in
-    let phi' = mk_and srk (phi' :: opt_fc_clauses) in
-    Log.errorf "OPT PHI here is %a" (Formula.pp srk) phi';
     let phi' = mk_exists_consts srk (fun sym -> not (Symbol.Set.mem sym !nuqr_syms)) phi' in
     phi', !nuqr_syms
 
@@ -822,7 +830,7 @@ module OldPmfa = struct
     in
 
     let phi = squash_eq_adds srk phi in
-    Log.errorf "Phi now is %a" (Formula.pp srk) phi;
+    Log.errorf "phi now is %a" (Formula.pp srk) phi;
     
 
 
@@ -861,6 +869,8 @@ module OldPmfa = struct
     Log.errorf "FORMULA PRIOR TO CALL IS %a" (Formula.pp srk) (T.formula tf_proj);
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
     Log.errorf "PMFA TO LIA CALLED HERE";
+
+    Log.errorf "LIA is %a" (Formula.pp srk) lia;
 
     let lia = 
       Quantifier.eq_guided_qe 
