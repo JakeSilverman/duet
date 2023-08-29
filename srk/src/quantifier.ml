@@ -3280,13 +3280,61 @@ let instantiate_first_bool srk phi =
   let phi' = helper phi in
   phi', !changed
 
+let simplify_eq_arith srk phi =
+  let term_of = Hashtbl.create 99 in
+  let sym_of = Memo.memo (fun t ->
+      let sym = mk_symbol srk `TyInt in
+      Hashtbl.add term_of sym t;
+      mk_const srk sym)
+  in
+  let rec to_numerical t =
+    match ArithTerm.destruct srk t with
+    | `Add lst -> mk_add srk (List.map to_numerical lst)
+    | `Mul lst -> mk_mul srk (List.map to_numerical lst)
+    | `Ite _ -> assert false
+    | `Var ind -> sym_of (ArithTerm.construct srk (`Var ind))
+    | `Unop (`Floor, a) -> mk_floor srk (to_numerical a)
+    | `Unop (`Neg, a) -> mk_neg srk (to_numerical a)
+    | `Binop (`Div, a, b) -> mk_div srk (to_numerical a) (to_numerical b)
+    | `Binop (`Mod, a, b) -> mk_mod srk (to_numerical a) (to_numerical b)
+    | `Select a -> sym_of (ArithTerm.construct srk (`Select a))
+    | _ -> t
+  in
+  let rec form_destructor phi =
+    match Formula.destruct srk phi with
+    | `And lst -> mk_and srk (List.map form_destructor lst)
+    | `Or lst -> mk_or srk (List.map form_destructor lst)
+    | `Not a -> mk_not srk (form_destructor a)
+    | `Quantify (`Exists, name, typ, a) -> mk_exists srk ~name typ (form_destructor a)
+    | `Quantify (`Forall, name, typ, a) -> mk_forall srk ~name typ (form_destructor a)
+    | `Proposition _
+    | `Tru
+    | `Fls -> phi
+    | `Ite _ -> assert false
+    | `Atom (`Arith(`Eq, a, b)) -> 
+      let term = mk_add srk [to_numerical a; mk_neg srk (to_numerical b)] in
+      let simp = Linear.of_linterm srk (Linear.linterm_of srk term) in
+      let simp' =
+        substitute_const
+          srk
+          (fun sym ->
+             if Hashtbl.mem term_of sym then Hashtbl.find term_of sym
+             else mk_const srk sym)
+          simp
+      in
+      mk_eq srk simp' (mk_zero srk)
+    | _ -> phi
+  in
+  form_destructor phi
+
 let eq_guided_elim_loop srk phi =
   let rec helper phi count =
     assert (count <= 100);
     let phi = miniscope srk phi in
     let phi = dumb_factor srk phi in
     let phi = miniscope srk phi in
-
+    let phi = simplify_eq_arith srk phi in
+ 
     let phi, changed = eq_guided_qe_helper srk phi in
     if changed then helper phi (count + 1) 
     else (
@@ -3300,7 +3348,6 @@ let eq_guided_elim_mini_loop srk phi =
     assert (count <= 10);
     let phi = miniscope srk phi in
     let phi = miniscope srk phi in
-
     let phi, changed = eq_guided_qe_helper srk phi in
     if changed then helper phi (count + 1) else phi
   in
