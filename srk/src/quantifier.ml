@@ -3302,16 +3302,38 @@ let simplify_eq_arith srk phi =
   in
   let rec form_destructor phi =
     match Formula.destruct srk phi with
-    | `And lst -> mk_and srk (List.map form_destructor lst)
-    | `Or lst -> mk_or srk (List.map form_destructor lst)
-    | `Not a -> mk_not srk (form_destructor a)
-    | `Quantify (`Exists, name, typ, a) -> mk_exists srk ~name typ (form_destructor a)
-    | `Quantify (`Forall, name, typ, a) -> mk_forall srk ~name typ (form_destructor a)
+    | `And lst -> 
+      let norm_juncts = List.map form_destructor lst in
+      let nt, norm_terms = BatList.partition (fun (_, info) -> Option.is_none info) norm_juncts in
+      let nt = List.map (fun (junct, _) -> junct) nt in
+      let seen = Hashtbl.create 99 in
+      let terms = Hashtbl.create 99 in
+      List.iter (fun (_, info) ->
+          let term, sym_simp, op = Option.get info in
+          if Hashtbl.mem seen (QQVector.scalar_mul (QQ.negate QQ.one) sym_simp) then (
+            (*Hashtbl.add terms term `Eq;*)
+            Hashtbl.add terms term op;
+            Hashtbl.add seen sym_simp true)
+          else Hashtbl.add seen sym_simp true)
+        norm_terms;
+      let terms = 
+        List.map (fun (term, op) -> mk_compare op srk term (mk_zero srk))
+          (BatHashtbl.to_list terms)
+      in
+        mk_and srk (nt @ terms), None
+ 
+    | `Or lst ->
+      let norm_juncts = List.map form_destructor lst in
+      let nt = List.map (fun (junct, _) -> junct) norm_juncts in
+      mk_or srk nt, None
+    | `Not a -> mk_not srk (fst (form_destructor a)), None
+    | `Quantify (`Exists, name, typ, a) -> mk_exists srk ~name typ (fst (form_destructor a)), None
+    | `Quantify (`Forall, name, typ, a) -> mk_forall srk ~name typ (fst (form_destructor a)), None
     | `Proposition _
     | `Tru
-    | `Fls -> phi
+    | `Fls -> phi, None
     | `Ite _ -> assert false
-    | `Atom (`Arith(`Eq, a, b)) -> 
+    | `Atom (`Arith(op, a, b)) -> 
       let term = mk_add srk [to_numerical a; mk_neg srk (to_numerical b)] in
       let simp = Linear.of_linterm srk (Linear.linterm_of srk term) in
       let simp' =
@@ -3322,10 +3344,10 @@ let simplify_eq_arith srk phi =
              else mk_const srk sym)
           simp
       in
-      mk_eq srk simp' (mk_zero srk)
-    | _ -> phi
+      (mk_compare op srk simp' (mk_zero srk), Some (simp', Linear.linterm_of srk term, op))
+    | _ -> phi, None
   in
-  form_destructor phi
+  fst (form_destructor phi)
 
 let eq_guided_elim_loop srk phi =
   let rec helper phi count =
