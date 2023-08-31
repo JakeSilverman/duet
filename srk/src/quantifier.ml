@@ -2765,7 +2765,6 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs_filt in
           eqs', diseqs', fv_tru', fv_fls', phi' 
         | Some (ind, term) ->
-          Log.errorf "Subst ind %n with term %a" ind (Expr.pp srk) term;
           (* mk_false should never be substitutable here *)
           let term' = subst term ind (mk_false srk) in
           let sub_pairs lst = 
@@ -2777,8 +2776,6 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
           let phi' = subst phi ind term' in
-          Log.errorf "OG WAS %a" (Formula.pp srk) phi;
-          Log.errorf "RESULT IS %a" (Formula.pp srk) phi';
           perform_subst
             cands'
             (BatList.remove_at ind qt_infos)
@@ -2985,7 +2982,6 @@ let normalized_intersection srk lsts =
 
 
 let eq_guided_qe_helper srk phi =
-  Log.errorf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
   let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
   let intersect lsts = normalized_intersection srk lsts in
@@ -3307,6 +3303,7 @@ let simplify_eq_arith srk phi =
       let nt, norm_terms = BatList.partition (fun (_, info) -> Option.is_none info) norm_juncts in
       let nt = List.map (fun (junct, _) -> junct) nt in
       let terms = Hashtbl.create 99 in
+      let terms_no_dups = Hashtbl.create 99 in
       let is_false = ref false in
       List.iter (fun (_, info) ->
           let term, inv, op = Option.get info in
@@ -3314,7 +3311,9 @@ let simplify_eq_arith srk phi =
           | Some `Eq, _ -> ()
           | Some `Leq, Some _ -> assert false
           | Some `Leq, None ->
-            if op = `Lt then BatHashtbl.replace terms term op
+            if op = `Lt then 
+              (BatHashtbl.replace terms term op;
+               BatHashtbl.replace terms_no_dups term op)
           | Some `Lt, _ -> ()
           | None, Some `Lt -> is_false := true;
           | None, Some `Eq -> assert false
@@ -3322,19 +3321,23 @@ let simplify_eq_arith srk phi =
             begin match op with
               | `Leq | `Eq ->
                 BatHashtbl.replace terms term `Eq;
-                BatHashtbl.replace terms inv `Eq
+                BatHashtbl.replace terms inv `Eq;
+                BatHashtbl.replace terms_no_dups term `Eq;
+                BatHashtbl.remove terms_no_dups inv;
               | `Lt -> is_false := true;
             end
           | None, None -> 
             if op = `Eq then (
               BatHashtbl.add terms term op;
-              BatHashtbl.add terms inv op;)
-            else BatHashtbl.add terms term op
+              BatHashtbl.add terms inv op;
+              BatHashtbl.add terms_no_dups term op)
+            else (BatHashtbl.add terms term op;
+                  BatHashtbl.add terms_no_dups term op)
           end)
         norm_terms;
       let terms = 
         List.map (fun (term, op) -> mk_compare op srk term (mk_zero srk))
-          (BatHashtbl.to_list terms)
+          (BatHashtbl.to_list terms_no_dups)
       in
       if !is_false then assert false;
       if !is_false then (mk_false srk, None) else
