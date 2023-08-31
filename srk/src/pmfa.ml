@@ -119,6 +119,92 @@ module OldPmfa = struct
 
   let flatten syms = List.fold_left (fun acc (sym, sym') -> sym :: sym' :: acc) [] syms 
   
+
+  (* Projects an array transition formula [tf] down to a single symbolic index
+   * [j]. The dynamics of element [j] of array transition variables (a, a') 
+   * are captured with the integer transition variables ([map] a, [map] a'). *)
+  let projection_with_store_elim srk tf eqs extras =
+    let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
+    let rmap = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
+
+    let j = mk_symbol srk ~name:"j" `TyInt in
+
+    let f (trs, arr_only_trs, symb_consts, phi) (a, a') =
+      if Symbol.Map.mem a eqs then (
+        let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
+        let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
+        let phi = 
+          mk_and 
+            srk 
+            [
+              mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+              phi]
+        in
+        Hashtbl.add map z a;
+
+        Hashtbl.add map z' a';
+        trs,
+        arr_only_trs,
+        z' :: symb_consts,
+        phi
+      )
+      else (
+      let z = mk_symbol srk ~name:("z"^(show_symbol srk a)) `TyInt in
+      let z' = mk_symbol srk ~name:("z'"^(show_symbol srk a')) `TyInt in
+      let phi = 
+        mk_and 
+          srk 
+          [mk_eq srk (mk_const srk z) (mk_select srk (mk_const srk a) (mk_const srk j));
+           mk_eq srk (mk_const srk z') (mk_select srk (mk_const srk a') (mk_const srk j));
+           phi]
+      in
+
+
+      Hashtbl.add map z a;
+      Hashtbl.add map z' a';
+      Hashtbl.add rmap a z;
+      Hashtbl.add rmap a' z';
+      (z, z') :: trs,
+      (z, z') :: arr_only_trs,
+      symb_consts,
+      phi)
+    in
+    let integer_trs, arr_only_trs, symb_consts, phi = 
+      List.fold_left f (int_trs srk tf, [], [], T.formula tf) (arr_trs srk tf) 
+    in
+    let rec decon_store node =
+      match ArrTerm.destruct srk node with
+      | `Store (a, i, v) ->
+        begin match decon_store a with
+          | Some b -> 
+            Some (mk_ite srk (mk_eq srk i (mk_const srk j)) v b)
+          | None -> None
+        end
+      | `Var _ -> None
+      | `App (a, []) -> Some (mk_const srk (Hashtbl.find rmap a))
+      | `Ite _ -> assert false
+      | _ -> assert false
+    in
+    let alg = function
+      | `Atom(`ArrEq (a, b)) -> 
+      let lhs = decon_store a in
+      let rhs = decon_store b in
+      begin match lhs, rhs with
+        | Some v1, Some v2 -> mk_eq srk v1 v2
+        | _ -> Formula.construct srk (`Atom(`ArrEq (a, b)))
+      end
+      | open_formula -> Formula.construct srk open_formula
+    in
+    let phi = Formula.eval srk alg phi in
+
+    (* TODO: Fix assumption that no symbolic constants *)
+    let phi = 
+      mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts || Symbol.Set.mem sym extras || sym = j) phi 
+    in
+    j, map, T.make phi integer_trs, arr_only_trs 
+
+
+
   (* Projects an array transition formula [tf] down to a single symbolic index
    * [j]. The dynamics of element [j] of array transition variables (a, a') 
    * are captured with the integer transition variables ([map] a, [map] a'). *)
@@ -249,12 +335,12 @@ module OldPmfa = struct
      * at the head of the lia formula *)
     let nuqr_syms = ref Symbol.Set.empty in
     let func_consist_reqs : ('a arr_term, 'a arith_term) Hashtbl.t = Hashtbl.create 100 in
-    let arr_usage_counts = Hashtbl.create 100 in
+    let all_reads = Hashtbl.create 100 in
     (* Maps the term a[i] to an integer symbol where i is not the universally
      * quantified var *)
     let non_uq_read : 'c * 'd -> 'a arith_term =
       Memo.memo (fun (arr, read) ->
-          BatHashtbl.modify_def 0 arr (fun s -> s + 1) arr_usage_counts;
+          BatHashtbl.modify_def Expr.Set.empty read (Expr.Set.add arr) all_reads;
           Hashtbl.add func_consist_reqs arr read;
           let sym = mk_symbol srk ~name:"NON_EQ_RE" `TyInt in
           nuqr_syms := Symbol.Set.add sym !nuqr_syms;
@@ -263,7 +349,7 @@ module OldPmfa = struct
     (* TODO: Make sure that array reads normalized for efficiency; don't want
      * seperate symbol for a[x + y] vs a[y + x]*)
     let rec termalg = function
-      |  `Select (a, i) -> 
+      | `Select (a, i) -> 
         if ArithTerm.equal i uq_term 
         then (mk_const srk (uq_read a))
         else (non_uq_read (a, i) :> ('a, typ_arith) expr)
@@ -282,42 +368,14 @@ module OldPmfa = struct
       | open_formula -> Formula.construct srk open_formula
     in
     let reads_replaced = Formula.eval srk formalg body in
-    (*BatHashtbl.filter_inplace (fun num -> num = 2) arr_usage_counts;
     (* TODO: verify - is this correct?... esp in case num =1 *)
-    let opt_fc_clauses =
-      List.map (fun (arr, num) ->
-          if num = 2 then (
-            let a, b = 
-              match BatHashtbl.find_all func_consist_reqs arr with
-              | [a; b] -> a, b
-              | _ -> assert false
-            in
-            BatHashtbl.remove_all func_consist_reqs arr;
-            mk_if 
-              srk
-              (mk_eq srk a b)
-              (mk_eq srk (non_uq_read (arr, a)) (non_uq_read (arr, b)))
-          )
-          else assert false)
-        (BatHashtbl.to_list arr_usage_counts)
-    in*)
     let functional_consistency_clauses =
-      match BatHashtbl.to_list func_consist_reqs with
-      | [(arr1, read1); (arr2, read2)] ->
-        let fc = 
-          mk_if
-            srk
-            (mk_eq srk read1 read2)
-            (mk_eq srk (non_uq_read (arr1, read1)) (non_uq_read (arr2, read2)))
-        in
-        [fc]
-      | lst ->
       List.map (fun (arr, read) ->
           mk_if 
             srk 
             (mk_eq srk uq_term read)
             (mk_eq srk (mk_const srk (uq_read arr)) (non_uq_read (arr, read))))
-        lst
+        (BatHashtbl.to_list func_consist_reqs)
     in
     let matrix = mk_and srk (reads_replaced :: functional_consistency_clauses) in
     let phi' = 
@@ -794,7 +852,6 @@ module OldPmfa = struct
           eqs
     in
 
-    Log.errorf "FORMULA AT START IS %a" (Formula.pp srk) (T.formula tf);
     let eqs_ints_trs =
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then (
@@ -830,7 +887,6 @@ module OldPmfa = struct
     in
 
     let phi = squash_eq_adds srk phi in
-    Log.errorf "phi now is %a" (Formula.pp srk) phi;
     
 
 
@@ -841,36 +897,24 @@ module OldPmfa = struct
 
 
 
-    let phi = eliminate_stores srk phi in
     let phi = eliminate_ite srk phi in
     let phi = unbooleanize srk phi in
 
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, arr_map, tf_proj, arr_only_trs = projection srk tf_pmfa eqs_trs new_eqs_consts in
-    (*let tf_proj' =
-      substitute_sym 
-        srk
-          (fun s ->
-             if Hashtbl.mem eqs_map s then (
-               mk_const srk (Hashtbl.find eqs_map s))
-             else if Hashtbl.mem arr_map s && 
-                     Hashtbl.mem eqs_map (Hashtbl.find arr_map s)
-             then (
-               mk_const srk
-                 (Hashtbl.find rev_map (Hashtbl.find eqs_map (Hashtbl.find arr_map s))))
-             else mk_const srk s)
-          (T.formula tf_proj)
-        in*)
+    let proj_ind, arr_map, tf_proj, arr_only_trs = projection_with_store_elim srk tf_pmfa eqs_trs new_eqs_consts in
 
+    Log.errorf "Formula with new proj is %a" (Formula.pp srk) (T.formula tf_proj);
 
-    Log.errorf "INIT FORMULA is %a" (Formula.pp srk) (T.formula tf);
-    Log.errorf "FORMULA PRIOR TO CALL IS %a" (Formula.pp srk) (T.formula tf_proj);
+    List.iter (fun (a, b) -> Log.errorf "Symbol is %a and %a" (pp_symbol srk) a (pp_symbol srk) b) (TransitionFormula.symbols tf_proj);
+    let tf_proj = T.update_formula tf_proj (eliminate_ite srk (T.formula tf_proj)) in
+
+    let tf_proj = T.update_formula tf_proj (eliminate_stores srk (T.formula tf_proj)) in
+
+    Log.errorf "PRIOR TO LIA is %a" (Formula.pp srk) (T.formula tf_proj);
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
-    Log.errorf "PMFA TO LIA CALLED HERE";
 
-    Log.errorf "LIA is %a" (Formula.pp srk) lia;
 
     let lia = 
       Quantifier.eq_guided_qe 
@@ -878,14 +922,16 @@ module OldPmfa = struct
         (Quantifier.miniscope srk lia)
     in
 
+    let lia = Quantifier.eq_guided_elim_loop srk lia in
 
     Log.errorf "Phi in abstract is %a" (Formula.pp srk) lia;
 
-
     let lia, skolems = skolemize_eh_alt srk lia in 
     let lia = Quantifier.miniscope srk lia in
-    Log.errorf "NOW IS %a" (Formula.pp srk) lia;
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
+
+    Log.errorf "Ground is is %a" (Formula.pp srk) ground_lia;
+
 
 
 
@@ -904,8 +950,10 @@ module OldPmfa = struct
        arr_only_trs;
        skolems
       }
-     
+
     let at_most_single_write srk write noop trs =
+
+      Log.errorf "NOOP IS %a" (Formula.pp srk) (T.formula noop);
       let exp = mk_symbol srk ~name:"exp" `TyInt in
 
       let noop_star =
