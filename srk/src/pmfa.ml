@@ -1130,8 +1130,6 @@ module OldPmfa = struct
       in
 
 
-      (* TODO: make sure quants introduced *)
-      let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
 
 
 
@@ -1176,62 +1174,21 @@ module OldPmfa = struct
 
 
 
-      let old_method = 
-        mk_or 
-          srk 
-          [mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);
-            nstar;
-           nstarwnstar] 
-      in
-
-
-
-     (* let arr_vars_eq = 
-        mk_and
-          srk
-          (List.map (fun (z, z') -> mk_eq srk (mk_const srk z) (mk_const srk z')) obj.arr_only_trs)
-      in*)
-
-(*
-
-     let noop_eqs = 
-        List.map 
-          (fun (x, x') -> mk_eq srk (mk_const srk x) (mk_const srk x'))
-          obj.iter_trs
-      in
-*)
-      (*let exists s = not (Symbol.Set.mem s obj.skolems) in
- 
-      let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
-      let noop = T.make ~exists noop obj.iter_trs in
- 
-      let nstar =
-        Iter2.exp
-           srk 
-           obj.iter_trs 
-           lc
-           (Iter2.abstract
-              srk 
-              noop)
-      in
-
-
-      let nstar = Quantifier.mbp_qe_inplace srk nstar in
-*)
-
-      (*let directs = directional_vars srk obj.ground_lia obj.iter_trs in
-      let directs_res, _, _ = create_phased_exps srk obj.ground_lia obj.iter_trs obj.proj_ind directs lc obj.skolems in
-      (* Redo this part to act on tfs rather than first converting to formula *)
-      let direct_res = mk_and srk directs_res in
-
-      let _direct_res = Quantifier.mbp_qe_inplace srk direct_res in 
-*)
-
       let exp_res_pre = 
         mk_or 
           srk 
-          [(*mk_and srk ((mk_eq srk lc (mk_int srk 0)) :: noop_eqs);*) old_method] 
+          [mk_and srk noop_eqs;
+            nstar;
+           nstarwnstar] 
       in
+      Syntax.to_file srk (mk_and srk noop_eqs) "/Users/jakesilverman/Documents/arraysmttests/noops_eqs.smt2";
+
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarwnstar.smt2";
+      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar.smt2";
+      Syntax.to_file srk exp_res_pre "/Users/jakesilverman/Documents/arraysmttests/exp_res.smt2";
+
+
+
       (*
        * In exp_res_pre, create equivalence classes of the array
        * projected symbols. If two projections belong to same class,
@@ -1260,10 +1217,6 @@ module OldPmfa = struct
           []
       in
 
-      (*let all_but_map = time "abp" in
-
-      diff nstarreal all_but_map "all but map";*)
-
 
 
       let map sym =  
@@ -1280,7 +1233,7 @@ module OldPmfa = struct
       diff t1 t2 "EXP";
       let res = mk_and srk (res ::  (eqs_2 @ eqs3)) in
       res
-      
+
 
     let pp _ _ _= failwith "todo 10"
 
