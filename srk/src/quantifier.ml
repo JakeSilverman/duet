@@ -3309,6 +3309,8 @@ let simplify_eq_arith srk phi =
           let term, inv, op = Option.get info in
           begin match BatHashtbl.find_option terms term, BatHashtbl.find_option terms inv with
           | Some `Eq, _ -> ()
+          (* When can this case ever be true? *)
+          | Some `Leq, Some `Leq -> Log.errorf "Leq false"; () (*assert false*)
           | Some `Leq, Some _ -> assert false
           | Some `Leq, None ->
             if op = `Lt then 

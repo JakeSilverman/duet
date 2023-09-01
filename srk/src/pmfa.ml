@@ -983,7 +983,7 @@ module OldPmfa = struct
       true*)
 
 
-    let exp srk _ lc obj =
+    let exp srk _ _lc obj =
       let t1 = time "EXP IN" in
 
       let arr_vars_eq = 
@@ -1047,6 +1047,7 @@ module OldPmfa = struct
                     noop))
               obj.iter_trs
           in
+          let noop_star1 = T.map_formula (mk_exists_const srk exp1) noop_star1 in
           let noop_star2 =
             T.make
               (Iter.exp
@@ -1060,11 +1061,12 @@ module OldPmfa = struct
                     noop))
               obj.iter_trs
           in
-
+          let noop_star2 = T.map_formula (mk_exists_const srk exp2) noop_star2 in
+ 
           let write_once = 
             T.mul srk noop_star1 (T.mul srk write noop_star2)
           in
-          let lc_constr = 
+          (*let lc_constr = 
             mk_and srk 
               [mk_eq
                  srk
@@ -1074,14 +1076,13 @@ module OldPmfa = struct
                               mk_int srk 1]);
                  mk_leq srk (mk_zero srk) (mk_const srk exp1);
                mk_leq srk (mk_zero srk) (mk_const srk exp2)]
-          in
+          in*)
           mk_and 
             srk 
             [mk_exists_consts 
                srk
-               (fun s -> (T.exists write_once s) && not (s = exp1) && not (s = exp2))
-               (T.formula write_once); 
-             lc_constr]
+               (fun s -> (T.exists write_once s))
+               (T.formula write_once)]
         )
         else (
           let iter =
@@ -1133,6 +1134,7 @@ module OldPmfa = struct
       let nstarwnstar = Quantifier.eq_guided_elim_loop srk nstarwnstar in
 
 
+      let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
 
 
 
@@ -1142,13 +1144,14 @@ module OldPmfa = struct
 
      diff nstar nstarmbp "nstarmbp";
 
+     let loop_c = mk_symbol srk `TyInt in
 
 
       let nstar =
         Iter2.exp
            srk 
            obj.iter_trs 
-           lc
+           (mk_const srk loop_c)
            (Iter2.abstract
               srk 
               noop)
@@ -1160,13 +1163,14 @@ module OldPmfa = struct
         Iter.exp
           srk 
           obj.iter_trs 
-          lc
+          (mk_const srk loop_c)
           (Iter.abstract
              srk 
              noop)
       in
 
       let nstar = mk_and srk [nstar; nstar2] in
+      let nstar = mk_exists_const srk loop_c nstar in
 
 
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
@@ -1186,6 +1190,7 @@ module OldPmfa = struct
             nstar;
            nstarwnstar] 
       in
+
 
 
 
