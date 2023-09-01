@@ -1130,6 +1130,11 @@ module OldPmfa = struct
       in
 
 
+      let nstarwnstar = Quantifier.eq_guided_elim_loop srk nstarwnstar in
+
+
+
+
 
 
 
