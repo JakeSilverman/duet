@@ -3289,10 +3289,10 @@ let simplify_eq_arith srk phi =
     | `Mul lst -> mk_mul srk (List.map to_numerical lst)
     | `Ite _ -> assert false
     | `Var ind -> sym_of (ArithTerm.construct srk (`Var ind))
-    | `Unop (`Floor, a) -> mk_floor srk (to_numerical a)
+    | `Unop (`Floor, a) -> sym_of (mk_floor srk (to_numerical a))
     | `Unop (`Neg, a) -> mk_neg srk (to_numerical a)
     | `Binop (`Div, a, b) -> mk_div srk (to_numerical a) (to_numerical b)
-    | `Binop (`Mod, a, b) -> mk_mod srk (to_numerical a) (to_numerical b)
+    | `Binop (`Mod, a, b) -> sym_of (mk_mod srk (to_numerical a) (to_numerical b))
     | `Select a -> sym_of (ArithTerm.construct srk (`Select a))
     | _ -> t
   in
@@ -3341,7 +3341,6 @@ let simplify_eq_arith srk phi =
         List.map (fun (term, op) -> mk_compare op srk term (mk_zero srk))
           (BatHashtbl.to_list terms_no_dups)
       in
-      if !is_false then assert false;
       if !is_false then (mk_false srk, None) else
         mk_and srk (nt @ terms), None
  
@@ -3356,8 +3355,9 @@ let simplify_eq_arith srk phi =
     | `Tru
     | `Fls -> phi, None
     | `Ite _ -> assert false
-    | `Atom (`Arith(op, a, b)) -> 
+    | `Atom (`Arith(op, a, b)) ->
       let term = mk_add srk [to_numerical a; mk_neg srk (to_numerical b)] in
+
       let vec = Linear.linterm_of srk term in
       let simp = Linear.of_linterm srk vec in
       let inv = 
