@@ -1181,11 +1181,6 @@ module OldPmfa = struct
             nstar;
            nstarwnstar] 
       in
-      Syntax.to_file srk (mk_and srk noop_eqs) "/Users/jakesilverman/Documents/arraysmttests/noops_eqs.smt2";
-
-      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/nstarwnstar.smt2";
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar.smt2";
-      Syntax.to_file srk exp_res_pre "/Users/jakesilverman/Documents/arraysmttests/exp_res.smt2";
 
 
 
