@@ -389,13 +389,22 @@ module GuardedTranslation = struct
           (fun s -> if Hashtbl.mem eq_subs s then Hashtbl.find eq_subs s else mk_const srk s)
           (mk_and srk ((TF.formula tf)::sx_eq_y))
       in
-      
-      Quantifier.mbp
+     
+    let phi = mk_exists_consts                                             
+          srk                                                                
+          (fun x -> Symbol.Map.mem x sym_to_var)                             
+          phi                                                                
+      in                                                                     
+      let phi = Quantifier.eq_guided_elim_loop srk phi in                    
+      let phi = Quantifier.mbp_qe_inplace srk phi in                         
+      SrkSimplify.simplify_dda srk (substitute_map srk sym_to_var phi)       
+
+      (*Quantifier.mbp
         srk
         (fun x -> Symbol.Map.mem x sym_to_var)
         phi
       |> substitute_map srk sym_to_var
-      |> SrkSimplify.simplify_dda srk
+      |> SrkSimplify.simplify_dda srk*)
     in
     
     let abs_exit = time "abs exot" in
