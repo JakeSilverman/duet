@@ -1242,14 +1242,21 @@ module OldPmfa = struct
 
     let pp _ _ _= failwith "todo 10"
 
+
+
+  end
+
+
+
+
+
     module TLLRF = TerminationLLRF
     module TDTA = TerminationDTA
 
-    let termination_exp = ref true
     let termination_llrf = ref true
     let termination_dta = ref true
     let termination_attractor = ref true
-
+    let termination_phase_analysis = ref true
 
     (* Attractor region analysis *)
     let attractor_regions srk tf =
@@ -1284,19 +1291,30 @@ module OldPmfa = struct
 
 
 
-    let mp srk tf =
+    module AD = Array_analysis (Iteration.Product(Iteration.LossyTranslation)(Iteration.PolyhedronGuard))
+          (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
 
-      let sym_to_var = Hashtbl.create 991 in
+
+
+    let mp srk tf =
+      Log.errorf "FORMULA entry tf is %a" (Formula.pp srk) (T.formula tf);
+      (*let sym_to_var = Hashtbl.create 991 in
 
       let of_symbol sym =
         if Hashtbl.mem sym_to_var sym then
           Some (Hashtbl.find sym_to_var sym)
         else
           None
-      in
-      let abs = abstract srk tf in
+      in*)
+      let abs = AD.abstract srk tf in
       let exists s = not (Symbol.Set.mem s abs.skolems) in
-      let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in 
+      let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
+      let flatten_trs =
+          List.fold_left (fun flat (x, x') ->
+            x :: x' :: flat)
+            []
+            abs.iter_trs
+      in
       let mp_lia = 
         (** over-approximate possibly non-terminating conditions for a transition *)
         begin
@@ -1307,12 +1325,13 @@ module OldPmfa = struct
                 Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
               in
               let subst sym =
-                match of_symbol sym with
-                | Some _ -> mk_const srk sym
-                | None -> fresh_skolem sym
+                match List.mem sym flatten_trs with
+                | true -> mk_const srk sym
+                | false -> fresh_skolem sym
               in
               substitute_const srk subst (T.formula tf)
             in
+            Log.errorf "PRE IS %a" (Formula.pp srk) pre;
             let llrf, has_llrf =
               if !termination_llrf then
                 if TLLRF.has_llrf srk tf then
@@ -1333,35 +1352,39 @@ module OldPmfa = struct
                 [mk_not srk (TDTA.mp srk tf)]
               else []
             in
-            let exp =
-              if (not has_llrf) && !termination_exp then
-                let mp =
-                  Syntax.mk_not srk
-                    (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
-                in
-                let dta_entails_mp =
-                  (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
-                  Syntax.mk_forall_consts
-                    srk
-                    (fun _ -> false)
-                    (Syntax.mk_if srk (mk_and srk dta) mp)
-                in
-                match Quantifier.simsat srk dta_entails_mp with
-                | `Sat -> []
-                | _ -> [mp]
-              else []
-            in
             let result =
-              Syntax.mk_and srk (llrf@dta@exp)
+              Syntax.mk_and srk (llrf@dta)
             in
+            Log.errorf "Result of nonterm is %a" (Formula.pp srk) result;
             match Quantifier.simsat srk result with
             | `Unsat -> mk_false srk
             | _ -> result
           in
-          nonterm tf_iter
+          if !termination_phase_analysis then begin
+    let predicates =
+(* Use variable directions & signs as candidate invariants *)
+    List.map (fun (x,x') ->
+                 let x = mk_const srk x in
+                 let x' = mk_const srk x' in
+
+                 Log.errorf "x is %a" (ArithTerm.pp srk) x;
+                 [mk_lt srk x x';
+                  mk_lt srk x' x;
+                  mk_eq srk x x'])
+               (T.symbols tf_iter)
+             |> List.concat
+           in
+           Iteration.phase_mp srk predicates tf_iter nonterm
+         end else (
+          let res = nonterm tf_iter in
+          Log.errorf "Noterm is %a" (Formula.pp srk) res; 
+          res)
         end
       in
-      Log.errorf "Formula here is %a" (Formula.pp srk) mp_lia;
+
+      Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
+      let mp_lia =  rewrite srk ~down:(nnf_rewriter srk) mp_lia in
+      Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
       let map sym =  
         if sym = abs.proj_ind
         then mk_var srk 0 `TyInt
@@ -1376,5 +1399,5 @@ module OldPmfa = struct
 
 
 
-  end
+
 end
