@@ -239,7 +239,6 @@ module Make
       match x with
       | Edge (p_c, p_h, phi) ->
 
-        Log.errorf "PHI ENTRY is %a" (Formula.pp srk) phi;
         let t1 = time "Star Enter" in
 
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
@@ -293,7 +292,6 @@ module Make
             (Quantifier.miniscope srk phi')
         in
         let syms = Memo.memo (fun (ind, typ) ->
-            Log.errorf "looking for sym %n" ind;
             let name = 
               if ind < List.length p_c then (
                 (fst (List.nth p_c ind))^"'")
@@ -309,10 +307,9 @@ module Make
             phi'
         in
         let phi' = Quantifier.eq_guided_elim_loop srk phi' in
-        Log.errorf "PHI' is %a" (Formula.pp srk) phi';
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
-        if t3 -. t1 > 100.1 then assert false else ();
+        (*if t3 -. t1 > 100.1 then assert false else ();*)
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         Edge (p_c, p_h, phi') 
 
@@ -331,7 +328,6 @@ module Make
     let omega edge =
       match edge with
       | Edge (p_c, p_h, phi) ->
-        Log.errorf "PHI IS %a" (Formula.pp srk) phi;
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
         let var_to_sym = Hashtbl.create 97 in
         let trs = 
@@ -353,7 +349,7 @@ module Make
             phi
         in
         let tf = TransitionFormula.make ~exists phi trs in
-        let mpped = AD.mp srk tf in
+        let mpped = Pmfa.OldPmfa.mp srk tf in
         
         let phi' =
           substitute_sym 
@@ -369,10 +365,7 @@ module Make
             srk
             (Quantifier.miniscope srk phi')
         in
-        Log.errorf "OMEGA IS %a" (Formula.pp srk) phi';
-        Log.errorf "Size of p_h is %n and p_c is %n" (List.length p_h) (List.length p_c);
         let syms = Memo.memo (fun (ind, typ) ->
-            Log.errorf "looking for sym %n" ind;
             let name = fst (List.nth p_h ind) in
             let s = mk_symbol srk ~name (typ :> typ)  in
             mk_const srk s)
@@ -390,12 +383,13 @@ module Make
     let omega_mul tf s = 
       match tf, s with
       | Edge (p_c, p_h, phi1), OEdge(_, phi2) ->
-        let phi' =
+      let phi' =
           List.fold_left (fun phi (name, typ) ->
               mk_exists srk ~name typ phi)
             (mk_and srk [phi1; phi2])
             p_c
         in
+
         let phi'' = Quantifier.eq_guided_qe srk phi' in
         OEdge (p_h, phi'')
 
@@ -881,6 +875,19 @@ module Make
       in
       let parse_query query = sym_of_decl (Z3.Expr.get_func_decl query) in
       let rules = List.map parse_rule (Z3.Fixedpoint.get_rules z3fp) in
+      let rules = 
+                 List.filter
+                    (fun (c, hypos, _) ->
+                        match hypos with
+                        | [hd] ->
+                            if Proposition.symbol_of hd = Proposition.symbol_of c &&
+                               (BatString.exists (show_symbol srk (Proposition.symbol_of c)) "empty.loop")
+                            then
+                                (Log.errorf "EMPTY LOOP found"; false)
+                            else true
+                        | _ -> true)    
+                    rules
+      in 
       let queries = Symbol.Set.of_list (List.map parse_query z3queries) in
       {rules; queries}
 
