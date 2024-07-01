@@ -1297,6 +1297,102 @@ does this affect *)
 
 
 
+let add srk = T.add srk
+let mul srk tf1 tf2 =
+   if (T.symbols tf1 != T.symbols tf2) then
+    invalid_arg "TransitionFormula.mul: incompatible transition formulas";
+  let fresh_symbols = ref Symbol.Set.empty in
+  let (map1, map2) =
+    List.fold_left (fun (phi_map, psi_map) (sym, sym') ->
+        let mid_name = "mid_" ^ (show_symbol srk sym) in
+        let mid_symbol =
+          mk_symbol srk ~name:mid_name (typ_symbol srk sym)
+        in
+        fresh_symbols := Symbol.Set.add mid_symbol (!fresh_symbols);
+        let mid = mk_const srk mid_symbol in
+        (Symbol.Map.add sym' mid phi_map,
+         Symbol.Map.add sym mid psi_map))
+      (Symbol.Map.empty, Symbol.Map.empty)
+      (T.symbols tf1)
+  in
+  let subst1 = substitute_map srk map1 in
+  let rename =
+    Memo.memo (fun x ->
+        let fresh =
+          mk_symbol srk ~name:(show_symbol srk x) (typ_symbol srk x)
+        in
+        fresh_symbols := Symbol.Set.add fresh (!fresh_symbols);
+        mk_const srk fresh)
+  in
+  let subst2 = (* rename Skolem constants *)
+    substitute_const srk
+      (fun x ->
+        if Symbol.Map.mem x map2 then
+          Symbol.Map.find x map2
+        else if (T.exists tf2 x) then
+          mk_const srk x
+        else rename x)
+  in
+  let phi' = mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym !fresh_symbols))) 
+       (mk_and srk [subst1 (T.formula tf1); subst2 (T.formula tf2)])
+  in
+  let phi'' = Quantifier.eq_guided_qe srk phi' in
+ 
+  T.make ~exists:(T.exists tf1) phi''  (T.symbols tf1)
+
+   let star srk tf =
+        let lc = mk_symbol srk ~name:"LC" `TyInt in
+        let phi' = AD.exp srk (T.symbols tf) (mk_const srk lc) (AD.abstract srk tf) in
+
+        let phi' =
+          Syntax.mk_exists_const
+            srk
+            lc
+            phi'
+        in
+
+        let phi' =
+          Quantifier.eq_guided_qe 
+            srk
+            (Quantifier.miniscope srk phi')
+        in
+        let phi' = Quantifier.eq_guided_elim_loop srk phi' in
+        T.make ~exists:(T.exists tf) phi' (T.symbols tf)
+module WG = WeightedGraph
+
+
+
+let tf_algebra srk symbols  = WG.{
+      mul = mul srk;
+      add = add srk;
+      one = T.identity srk symbols;
+      zero = T.zero srk symbols;
+      star = star srk }
+
+let mp_algebra srk nonterm = WG.{
+      omega = nonterm;
+      omega_add = (fun p1 p2 -> Syntax.mk_or srk [p1; p2]);
+      omega_mul = (fun transition state -> T.preimage srk transition state ) }
+
+
+
+let phase_mp_ported srk candidate_predicates tf nonterm =
+  Log.errorf "Formula in phase mp is %a" (Formula.pp srk)(T.formula tf);
+  let algebra = tf_algebra srk (T.symbols tf) in
+  let wg = Iteration.phase_graph srk tf candidate_predicates algebra in
+  (* node (-1) is virtual entry.  Add edges to all isolated vertices
+     (only one in-edge, from its self-loop).  *)
+  let wg =
+    WG.fold_vertex (fun v wg ->
+        if WG.U.in_degree (WG.forget_weights wg) v == 1 then
+            WG.add_edge wg (-1) algebra.one v
+        else
+          wg)
+      wg
+      (WG.add_vertex wg (-1))
+  in
+  WG.omega_path_weight wg (mp_algebra srk nonterm) (-1)
+
     let mp srk tf =
       Log.errorf "FORMULA entry tf is %a" (Formula.pp srk) (T.formula tf);
       (*let sym_to_var = Hashtbl.create 991 in
@@ -1309,15 +1405,17 @@ does this affect *)
       in*)
       let abs = AD.abstract srk tf in
       let exists s = not (Symbol.Set.mem s abs.skolems) in
-      let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
+      let _tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
       let flatten_trs =
           List.fold_left (fun flat (x, x') ->
             Log.errorf "Symbol is %a" (pp_symbol srk) x;
             x :: x' :: flat)
-            (abs.proj_ind :: abs.symb_consts)
-            (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))
+            []
+            (T.symbols tf)
+            (*(abs.proj_ind :: abs.symb_consts)
+            (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))*)
       in
-      Log.errorf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);
+      (*Log.errorf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);*)
       let mp_lia = 
         (** over-approximate possibly non-terminating conditions for a transition *)
         begin
@@ -1366,26 +1464,36 @@ does this affect *)
           if !termination_phase_analysis then begin
     let predicates =
 (* Use variable directions & signs as candidate invariants *)
-    List.map (fun (x,x') ->
+    BatList.filter_map (fun (x,x') ->
+                 if typ_symbol srk x != `TyInt && typ_symbol srk x != `TyReal then None
+                 else  
                  let x = mk_const srk x in
                  let x' = mk_const srk x' in
 
                  Log.errorf "x is %a" (ArithTerm.pp srk) x;
-                 [mk_lt srk x x';
+                 Some [mk_lt srk x x';
                   mk_lt srk x' x;
                   mk_eq srk x x'])
-               (T.symbols tf_iter)
+               (T.symbols tf)
              |> List.concat
            in
-           Iteration.phase_mp srk predicates tf_iter nonterm
+           phase_mp_ported srk predicates tf nonterm
          end else (
-          let res = nonterm tf_iter in
+          let res = nonterm tf in
           res)
         end
       in
 
       let mp_lia =  rewrite srk ~down:(nnf_rewriter srk) mp_lia in
       Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
+      let mp_lia2 = 
+        mk_exists_consts
+           srk
+           (fun s -> exists s)
+           mp_lia
+      in 
+      Log.errorf "Formula MP LIA POST EXIST is %a" (Formula.pp srk) mp_lia2;
+ 
       let map sym =  
         if sym = abs.proj_ind
         then mk_var srk 0 `TyInt

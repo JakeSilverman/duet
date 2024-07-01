@@ -98,3 +98,9 @@ val phase_mp : 'a context ->
                'a TransitionFormula.t ->
                ('a TransitionFormula.t -> 'a formula) ->
                'a formula
+
+val phase_graph :             'a Syntax.context ->
+            'a TransitionFormula.t ->
+            ('a, Syntax.typ_bool) Syntax.expr list ->
+            'a TransitionFormula.t WeightedGraph.algebra -> 'a TransitionFormula.t WeightedGraph.weighted_graph
+
