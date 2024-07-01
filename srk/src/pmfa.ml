@@ -201,7 +201,7 @@ module OldPmfa = struct
     let phi = 
       mk_exists_consts srk (fun sym -> List.mem sym (flatten integer_trs) || List.mem sym symb_consts || Symbol.Set.mem sym extras || sym = j) phi 
     in
-    j, map, T.make phi integer_trs, arr_only_trs 
+    j, map, T.make phi integer_trs, arr_only_trs, symb_consts 
 
 
 
@@ -689,7 +689,9 @@ module OldPmfa = struct
         iter_trs : (Symbol.t * Symbol.t) list;
         ground_lia : 'a formula;
         arr_only_trs : (symbol * symbol) list;
-        skolems : Symbol.Set.t }
+        skolems : Symbol.Set.t;
+        symb_consts : Symbol.t list }
+
 
     let arr_eqs srk tf = 
       let alg = function
@@ -841,12 +843,14 @@ module OldPmfa = struct
 
       let trs = ref (T.symbols tf) in
 
+      (* this was changed to use pre for map instead of post for term... what
+does this affect *)
       let eqs_trs =
         List.fold_left (fun eqs_trs (a, b) ->
             if List.mem (a, b) (T.symbols tf) then (
-              Symbol.Map.add a b eqs_trs)
-            else if List.mem (b, a) (T.symbols tf) then (
               Symbol.Map.add b a eqs_trs)
+            else if List.mem (b, a) (T.symbols tf) then (
+              Symbol.Map.add a b eqs_trs)
             else eqs_trs)
           Symbol.Map.empty
           eqs
@@ -856,10 +860,10 @@ module OldPmfa = struct
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then (
             trs := BatList.remove !trs (a, b);
-            Symbol.Map.add a b eqs_trs)
+            Symbol.Map.add b a eqs_trs)
           else if List.mem (b, a) (T.symbols tf) then (
             trs := BatList.remove !trs (b, a);
-            Symbol.Map.add b a eqs_trs)
+            Symbol.Map.add a b eqs_trs)
           else eqs_trs)
         Symbol.Map.empty
         (int_eqs srk tf)
@@ -903,7 +907,7 @@ module OldPmfa = struct
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, arr_map, tf_proj, arr_only_trs = projection_with_store_elim srk tf_pmfa eqs_trs new_eqs_consts in
+    let proj_ind, arr_map, tf_proj, arr_only_trs, symb_consts = projection_with_store_elim srk tf_pmfa eqs_trs new_eqs_consts in
 
     Log.errorf "Formula with new proj is %a" (Formula.pp srk) (T.formula tf_proj);
 
@@ -934,10 +938,6 @@ module OldPmfa = struct
 
 
 
-
-
-
-
       let exit_abst = time "Exit ABSTRACT" in
       diff t1 exit_abst "Exit Abstract";
       {
@@ -948,7 +948,8 @@ module OldPmfa = struct
        iter_trs=(T.symbols tf_proj);
        ground_lia;
        arr_only_trs;
-       skolems
+       skolems;
+       symb_consts
       }
 
     let at_most_single_write srk write noop trs =
@@ -1311,18 +1312,22 @@ module OldPmfa = struct
       let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
       let flatten_trs =
           List.fold_left (fun flat (x, x') ->
+            Log.errorf "Symbol is %a" (pp_symbol srk) x;
             x :: x' :: flat)
-            []
-            abs.iter_trs
+            (abs.proj_ind :: abs.symb_consts)
+            (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))
       in
+      Log.errorf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);
       let mp_lia = 
         (** over-approximate possibly non-terminating conditions for a transition *)
         begin
           let open Syntax in
           let nonterm tf =
+            Log.errorf "entry nonterm tf is %a" (Formula.pp srk) (T.formula tf);
             let pre =
               let fresh_skolem =
-                Memo.memo (fun sym -> mk_const srk (dup_symbol srk sym))
+                Memo.memo (fun sym -> Log.errorf "Dupping sym %a" (pp_symbol srk) sym;
+                    mk_const srk (dup_symbol srk sym))
               in
               let subst sym =
                 match List.mem sym flatten_trs with
@@ -1331,7 +1336,7 @@ module OldPmfa = struct
               in
               substitute_const srk subst (T.formula tf)
             in
-            Log.errorf "PRE IS %a" (Formula.pp srk) pre;
+            Log.errorf "pre is %a" (Formula.pp srk) pre;
             let llrf, has_llrf =
               if !termination_llrf then
                 if TLLRF.has_llrf srk tf then
@@ -1345,7 +1350,6 @@ module OldPmfa = struct
                 (* If LLRF is disabled, default to pre *)
                 [pre], false
             in
-            Log.errorf "was success? %b" has_llrf;
             let dta =
               (* If LLRF succeeds, then we do not try dta *)
               if (not has_llrf) && !termination_dta then
@@ -1355,7 +1359,6 @@ module OldPmfa = struct
             let result =
               Syntax.mk_and srk (llrf@dta)
             in
-            Log.errorf "Result of nonterm is %a" (Formula.pp srk) result;
             match Quantifier.simsat srk result with
             | `Unsat -> mk_false srk
             | _ -> result
@@ -1377,12 +1380,10 @@ module OldPmfa = struct
            Iteration.phase_mp srk predicates tf_iter nonterm
          end else (
           let res = nonterm tf_iter in
-          Log.errorf "Noterm is %a" (Formula.pp srk) res; 
           res)
         end
       in
 
-      Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
       let mp_lia =  rewrite srk ~down:(nnf_rewriter srk) mp_lia in
       Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
       let map sym =  
@@ -1395,6 +1396,7 @@ module OldPmfa = struct
       in
       let substed = substitute_const srk map mp_lia in
       let res = (mk_forall srk `TyInt substed) in
+     Log.errorf "Result after MP is %a" (Formula.pp srk) res;
       res
 
 
