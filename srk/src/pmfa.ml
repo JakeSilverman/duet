@@ -1294,7 +1294,7 @@ does this affect *)
 
 
     module AD = Array_analysis (Iteration.Product(Iteration.LossyTranslation)(Iteration.PolyhedronGuard))
-          (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
+        (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
 (*
 let phase_mp_ported srk candidate_predicates tf nonterm =
   Log.errorf "Formula in phase mp is %a" (Formula.pp srk)(TF.formula tf);
@@ -1327,21 +1327,21 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       Log.errorf "FORMULA entry tf is %a" (Formula.pp srk) (T.formula tf);
       (*let sym_to_var = Hashtbl.create 991 in
 
-      let of_symbol sym =
+        let of_symbol sym =
         if Hashtbl.mem sym_to_var sym then
           Some (Hashtbl.find sym_to_var sym)
         else
           None
-      in*)
+        in*)
       let abs = AD.abstract srk tf in
       let exists s = not (Symbol.Set.mem s abs.skolems) in
       let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
       let flatten_trs =
-          List.fold_left (fun flat (x, x') ->
+        List.fold_left (fun flat (x, x') ->
             Log.errorf "Symbol is %a" (pp_symbol srk) x;
             x :: x' :: flat)
-            (abs.proj_ind :: abs.symb_consts)
-            (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))
+          (abs.proj_ind :: abs.symb_consts)
+          (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))
       in
       Log.errorf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);
       let mp_lia = 
@@ -1353,7 +1353,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
             let pre =
               let fresh_skolem =
                 Memo.memo (fun sym -> Log.errorf "Dupping sym %a" (pp_symbol srk) sym;
-                    mk_const srk (dup_symbol srk sym))
+                            mk_const srk (dup_symbol srk sym))
               in
               let subst sym =
                 match List.mem sym flatten_trs with
@@ -1382,51 +1382,51 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
                 [mk_not srk (TDTA.mp srk tf)]
               else []
             in
-           let exp =
+            let exp =
               if (not has_llrf) && !termination_exp then
-                 let mp =
-                    Syntax.mk_not srk
-                     (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
-                 in
+                let mp =
+                  Syntax.mk_not srk
+                    (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
+                in
                 let dta_entails_mp =
-                    (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
-                    Syntax.mk_forall_consts
-                        srk
-                        (fun _ -> false)
-                        (Syntax.mk_if srk (mk_and srk dta) mp)
+                  (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
+                  Syntax.mk_forall_consts
+                    srk
+                    (fun _ -> false)
+                    (Syntax.mk_if srk (mk_and srk dta) mp)
                 in
                 match Quantifier.simsat srk dta_entails_mp with
                 | `Sat -> []
                 | _ -> [mp]
-                else []
-        in
-        Log.errorf " exp is %a" (Formula.pp srk) (mk_and srk exp);
-         let result =
-           Syntax.mk_and srk (llrf@dta@exp)
-         in
-     match Quantifier.simsat srk result with
+              else []
+            in
+            Log.errorf " exp is %a" (Formula.pp srk) (mk_and srk exp);
+            let result =
+              Syntax.mk_and srk (llrf@dta@exp)
+            in
+            match Quantifier.simsat srk result with
             | `Unsat -> mk_false srk
             | _ -> result
           in
-      
-          if !termination_phase_analysis then begin
-    let predicates =
-(* Use variable directions & signs as candidate invariants *)
-    List.map (fun (x,x') ->
-                 let x = mk_const srk x in
-                 let x' = mk_const srk x' in
 
-                 Log.errorf "x is %a" (ArithTerm.pp srk) x;
-                 [mk_lt srk x x';
-                  mk_lt srk x' x;
-                  mk_eq srk x x'])
-               (T.symbols tf_iter)
-             |> List.concat
-           in
-           Iteration.phase_mp srk predicates tf_iter nonterm
-         end else (
-          let res = nonterm tf_iter in
-          res)
+          if !termination_phase_analysis then begin
+            let predicates =
+              (* Use variable directions & signs as candidate invariants *)
+              List.map (fun (x,x') ->
+                  let x = mk_const srk x in
+                  let x' = mk_const srk x' in
+
+                  Log.errorf "x is %a" (ArithTerm.pp srk) x;
+                  [mk_lt srk x x';
+                   mk_lt srk x' x;
+                   mk_eq srk x x'])
+                (T.symbols tf_iter)
+              |> List.concat
+            in
+            Iteration.phase_mp srk predicates tf_iter nonterm
+          end else (
+            let res = nonterm tf_iter in
+            res)
         end
       in
 
@@ -1434,9 +1434,9 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
       let mp_lia = 
         mk_exists_consts
-           srk
-           (fun s -> List.mem s flatten_trs)
-           mp_lia
+          srk
+          (fun s -> List.mem s flatten_trs)
+          mp_lia
       in 
       Log.errorf "Formula MP LIA POST EXIST is %a" (Formula.pp srk) mp_lia;
 
@@ -1458,10 +1458,10 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       in
       let substed = substitute_const srk map mp_lia in
       let res = (mk_forall srk `TyInt substed) in
-     Log.errorf "Result after MP is %a" (Formula.pp srk) res;
+      Log.errorf "Result after MP is %a" (Formula.pp srk) res;
       res
 
 
 
 
-end
+  end
