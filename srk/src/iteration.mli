@@ -93,7 +93,8 @@ module MakeDomain(Iter : PreDomain) : Domain
    This function takes a set of candidate transition predicates, a transition formula,
    and a mortal precondition operator and returns another mortal precondition
    via analyzing the phase transition structure of the transition formula. *)
-val phase_mp : 'a context -> 
+val phase_mp : 'a context ->
+               ?star:('a TransitionFormula.t -> 'a TransitionFormula.t) option ->
                ('a formula) list ->
                'a TransitionFormula.t ->
                ('a TransitionFormula.t -> 'a formula) ->
@@ -102,10 +103,10 @@ val phase_mp : 'a context ->
 
 val predicate_at_most_once : 
   'a context -> 
-  'a TransitionFormula.t ->
   'a formula ->
   'a formula ->
   'a formula list ->
+  'a TransitionFormula.t ->
   'a TransitionFormula.t
 
 

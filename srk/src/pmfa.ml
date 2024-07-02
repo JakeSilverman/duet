@@ -706,7 +706,7 @@ module OldPmfa = struct
       in
       Formula.eval srk alg (T.formula tf)
 
-    let int_eqs srk tf = 
+    let _int_eqs srk tf = 
       let alg = function
         | `Atom (`Arith (`Eq, a, b)) ->
           begin match ArithTerm.destruct srk a, ArithTerm.destruct srk b with
@@ -839,13 +839,13 @@ module OldPmfa = struct
       let t1 = time "In abstract" in
 
 
-      let eqs = arr_eqs srk tf in
+      let _eqs = arr_eqs srk tf in
 
       let trs = ref (T.symbols tf) in
 
       (* this was changed to use pre for map instead of post for term... what
 does this affect *)
-      let eqs_trs =
+      let eqs_trs = Symbol.Map.empty (*
         List.fold_left (fun eqs_trs (a, b) ->
             if List.mem (a, b) (T.symbols tf) then (
               Symbol.Map.add b a eqs_trs)
@@ -853,10 +853,10 @@ does this affect *)
               Symbol.Map.add a b eqs_trs)
             else eqs_trs)
           Symbol.Map.empty
-          eqs
+          eqs*)
     in
 
-    let eqs_ints_trs =
+    let eqs_ints_trs = Symbol.Map.empty (*
       List.fold_left (fun eqs_trs (a, b) ->
           if List.mem (a, b) (T.symbols tf) then (
             trs := BatList.remove !trs (a, b);
@@ -866,7 +866,7 @@ does this affect *)
             Symbol.Map.add a b eqs_trs)
           else eqs_trs)
         Symbol.Map.empty
-        (int_eqs srk tf)
+        (int_eqs srk tf)*)
     in
 
     (*let eqs_ints_trs = Symbol.Map.empty in*)
@@ -1334,8 +1334,37 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
           None
         in*)
       let abs = AD.abstract srk tf in
+
+      let arr_vars_eq = 
+        mk_and
+          srk
+          (List.map (fun (z, z') -> mk_eq srk (mk_const srk z) (mk_const srk z')) abs.arr_only_trs)
+      in
+
+
+      let write = mk_and srk [abs.ground_lia; mk_not srk arr_vars_eq] in
+      let write =
+        rewrite srk ~down:(nnf_rewriter srk) write
+      in
+
+      let noop = mk_and srk [abs.ground_lia; arr_vars_eq] in 
+      let noop =
+        rewrite srk ~down:(nnf_rewriter srk) noop
+      in
+
+
+
       let exists s = not (Symbol.Set.mem s abs.skolems) in
       let tf_iter = T.make ~exists abs.ground_lia abs.iter_trs in
+
+      let star = 
+        Iteration.predicate_at_most_once
+          srk
+          noop
+          write
+          []
+      in
+      let _star = Some star in
       let flatten_trs =
         List.fold_left (fun flat (x, x') ->
             Log.errorf "Symbol is %a" (pp_symbol srk) x;

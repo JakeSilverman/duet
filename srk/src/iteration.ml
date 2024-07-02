@@ -1171,7 +1171,7 @@ let phase_graph srk tf candidates algebra =
   !wg
 
 
-let predicate_at_most_once srk tf pred1 pred2 opts =
+let predicate_at_most_once srk pred1 pred2 opts tf =
   let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
   let module E = LossyTranslation in
   let tf_pred1 =
@@ -1241,13 +1241,16 @@ let predicate_at_most_once srk tf pred1 pred2 opts =
 
 
 
-let phase_mp srk candidate_predicates tf nonterm =
-  let star tf =
-    let module E = LossyTranslation in
-    let k = mk_symbol srk `TyInt in
-    let exists x = x != k && (TF.exists tf) x in
-    TF.make ~exists
-      (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf)) (TF.symbols tf)
+let phase_mp srk ?(star=None) candidate_predicates tf nonterm =
+  let star tf = 
+    match star with
+    | None ->
+      let module E = LossyTranslation in
+      let k = mk_symbol srk `TyInt in
+      let exists x = x != k && (TF.exists tf) x in
+      TF.make ~exists
+        (E.exp srk (TF.symbols tf) (mk_const srk k) (E.abstract srk tf)) (TF.symbols tf)
+    | Some v -> v tf
   in
   let algebra = tf_algebra srk (TF.symbols tf) star in
   let wg = phase_graph srk tf candidate_predicates algebra in
