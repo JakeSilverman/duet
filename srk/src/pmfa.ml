@@ -1255,6 +1255,7 @@ does this affect *)
     module TDTA = TerminationDTA
 
     let termination_llrf = ref true
+    let termination_exp = ref true 
     let termination_dta = ref true
     let termination_attractor = ref true
     let termination_phase_analysis = ref true
@@ -1381,13 +1382,33 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
                 [mk_not srk (TDTA.mp srk tf)]
               else []
             in
-            let result =
-              Syntax.mk_and srk (llrf@dta)
-            in
-            match Quantifier.simsat srk result with
+           let exp =
+              if (not has_llrf) && !termination_exp then
+                 let mp =
+                    Syntax.mk_not srk
+                     (TerminationExp.mp (module Iteration.LossyTranslation) srk tf)
+                 in
+                let dta_entails_mp =
+                    (* if DTA |= mp, DTA /\ MP simplifies to DTA *)
+                    Syntax.mk_forall_consts
+                        srk
+                        (fun _ -> false)
+                        (Syntax.mk_if srk (mk_and srk dta) mp)
+                in
+                match Quantifier.simsat srk dta_entails_mp with
+                | `Sat -> []
+                | _ -> [mp]
+                else []
+        in
+        Log.errorf " exp is %a" (Formula.pp srk) (mk_and srk exp);
+         let result =
+           Syntax.mk_and srk (llrf@dta@exp)
+         in
+     match Quantifier.simsat srk result with
             | `Unsat -> mk_false srk
             | _ -> result
           in
+      
           if !termination_phase_analysis then begin
     let predicates =
 (* Use variable directions & signs as candidate invariants *)
