@@ -1170,6 +1170,77 @@ let phase_graph srk tf candidates algebra =
   done;
   !wg
 
+
+let predicate_at_most_once srk tf pred1 pred2 opts =
+  let exp1 = mk_symbol srk ~name:"exp1" `TyInt in
+  let module E = LossyTranslation in
+  let tf_pred1 =
+    TF.update_formula
+      tf
+      (mk_and srk [(TF.formula tf); pred1])
+  in
+  let tf_pred2 =
+    TF.update_formula
+      tf
+      (mk_and srk [(TF.formula tf); pred2])
+  in
+ 
+  let pred1_star =
+    TF.make
+      (E.exp
+         srk 
+         (TF.symbols tf) 
+         (mk_const 
+            srk 
+            exp1)
+         (E.abstract 
+            srk 
+            tf_pred1))
+      (TF.symbols tf)
+  in
+  let p2_p1s_p2 = 
+    TF.mul srk tf_pred2 (TF.mul srk pred1_star tf_pred2)
+  in
+  match Smt.is_sat srk (TF.formula p2_p1s_p2) with
+  | `Unknown 
+  | `Sat -> TF.make ~exists:(TF.exists tf) (mk_true srk) (TF.symbols tf)
+  | `Unsat ->
+    let pred1_star = TF.map_formula (mk_exists_const srk exp1) pred1_star in
+
+    let pred2_once = 
+      TF.mul srk pred1_star (TF.mul srk tf_pred2 pred1_star)
+    in
+    let pred2_once_phi = 
+      Quantifier.eq_guided_qe 
+        srk
+        (Quantifier.miniscope srk (TF.formula pred2_once))
+    in
+
+    let pred2_once_phi = Quantifier.eq_guided_elim_loop srk pred2_once_phi in
+
+
+    let pred2_once_phi = Quantifier.mbp_qe_inplace srk pred2_once_phi in
+    let pred1_only_phi =
+      Quantifier.eq_guided_qe 
+        srk
+        (Quantifier.miniscope srk (TF.formula pred1_star))
+    in
+    let pred1_only_phi = Quantifier.eq_guided_elim_loop srk pred1_only_phi in
+
+
+    let pred1_only_phi = Quantifier.mbp_qe_inplace srk pred1_only_phi in
+
+    let exp_res_pre = 
+      mk_or 
+        srk 
+        [pred1_only_phi;
+         pred2_once_phi] 
+    in
+    TF.make ~exists:(TF.exists tf) (mk_and srk (exp_res_pre ::  opts)) (TF.symbols tf)
+
+
+
+
 let phase_mp srk candidate_predicates tf nonterm =
   let star tf =
     let module E = LossyTranslation in

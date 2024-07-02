@@ -99,6 +99,17 @@ val phase_mp : 'a context ->
                ('a TransitionFormula.t -> 'a formula) ->
                'a formula
 
+
+val predicate_at_most_once : 
+  'a context -> 
+  'a TransitionFormula.t ->
+  'a formula ->
+  'a formula ->
+  'a formula list ->
+  'a TransitionFormula.t
+
+
+
 val phase_graph :             'a Syntax.context ->
             'a TransitionFormula.t ->
             ('a, Syntax.typ_bool) Syntax.expr list ->
