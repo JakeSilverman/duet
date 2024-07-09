@@ -353,8 +353,7 @@ module Make
             phi
         in
         let tf = TransitionFormula.make ~exists phi trs in
-        let mpped = AD.mp srk tf in
-        
+        let mpped = Pmfa.OldPmfa.mp srk tf in 
         let phi' =
           substitute_sym 
             srk
