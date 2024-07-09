@@ -3280,8 +3280,8 @@ let instantiate_first_bool srk phi =
   let phi' = helper phi in
   phi', !changed
 
-
-let simplify_eq_arith srk phi =
+(* This is not up to date version, but this and up to date both buggy *)
+let _simplify_eq_arith srk phi =
   let term_of = Hashtbl.create 99 in
   let sym_of = Memo.memo (fun t ->
       let sym = mk_symbol srk `TyInt in
@@ -3334,7 +3334,6 @@ let eq_guided_elim_loop srk phi =
     let phi = miniscope srk phi in
     let phi = dumb_factor srk phi in
     let phi = miniscope srk phi in
-    let phi = simplify_eq_arith srk phi in
 
     let phi, changed = eq_guided_qe_helper srk phi in
     if changed then helper phi (count + 1) 
