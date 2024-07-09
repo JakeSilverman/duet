@@ -312,7 +312,7 @@ module Make
         Log.errorf "PHI' is %a" (Formula.pp srk) phi';
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
-        if t3 -. t1 > 100.1 then assert false else ();
+        (*if t3 -. t1 > 100.1 then assert false else ();*)
         (* TODO: try to remove the new quants via miniscoping/del procedure *)
         Edge (p_c, p_h, phi') 
 
@@ -880,6 +880,19 @@ module Make
       in
       let parse_query query = sym_of_decl (Z3.Expr.get_func_decl query) in
       let rules = List.map parse_rule (Z3.Fixedpoint.get_rules z3fp) in
+      let rules =
+        List.filter
+          (fun (c, hypos, _) ->
+             match hypos with
+             | [hd] ->
+               if Proposition.symbol_of hd = Proposition.symbol_of c &&
+                  (BatString.exists (show_symbol srk (Proposition.symbol_of c)) "empty.loop")
+               then
+                 (Log.errorf "EMPTY LOOP found"; false)
+               else true
+             | _ -> true)
+          rules
+      in
       let queries = Symbol.Set.of_list (List.map parse_query z3queries) in
       {rules; queries}
 
