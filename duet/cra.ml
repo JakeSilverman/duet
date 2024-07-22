@@ -1319,6 +1319,12 @@ let resource_bound_analysis file =
     end
   | _ -> assert false
 
+
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
+
+
+
 let _ =
   CmdLine.register_config
     ("-cra-no-forward-inv",
@@ -1344,6 +1350,7 @@ let _ =
          K.domain := (module ProductWedge(SolvablePolynomialPeriodicRational)(WedgeGuard))),
      " Use periodic rational spectral decomposition");
   CmdLine.register_config
+<<<<<<< HEAD
     ("-cra-refine",
      Arg.Set cra_refine,
      " Turn on loop refinement");
@@ -1351,6 +1358,14 @@ let _ =
     ("-cra-refine-full",
     Arg.Unit (fun () -> cra_refine := true; K.CRARefinement.refine_full := true),
     " Turn on unrestricted loop refinement");
+=======
+    ("-cra-array-front",
+     Arg.Unit (fun () ->
+         let open Iteration in
+         K.domain := (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)),
+     " Use Arr abstraction");
+>>>>>>> 7c2a9d48 (pmfa front end)
   CmdLine.register_config
     ("-cra-vas",
      Arg.Unit (fun () ->
@@ -1457,10 +1472,6 @@ let _ =
          | "LIRR" -> Syntax.set_theory srk `LIRR
          | th -> failwith ("Unrecognized theory: " ^ th)),
      " Set background theory (LIRA, LIRR)")
-
-let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
-      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
-
 
 (*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
 i*)
