@@ -3069,6 +3069,7 @@ let eq_guided_qe_helper srk phi =
     | `Atom (`ArrEq (a, b)) ->
       [(a :> 'a term), (b :> 'a term)], [], emp, emp, `Atom (mk_arr_eq srk a b)
     | `Atom (`Arith (`Lt, x, y)) -> [], [], emp, emp, `Atom (mk_lt srk x y)
+    | `Atom (`IsInt (n)) -> [], [], emp, emp, `Atom (mk_is_int srk n)
     | `Atom (`Arith (`Leq, x, y)) -> [], [], emp, emp, `Atom (mk_leq srk x y)
     | `And conjuncts ->
       let (eqs, diseqs, fv_trus, fv_flss, conjs) = 

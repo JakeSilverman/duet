@@ -808,7 +808,7 @@ let analyze file =
           dump_goal loc path_condition;
           if !monotone then
             begin
-            match LirrSolver.is_sat Ctx.context path_condition with
+            match Smt.is_sat Ctx.context path_condition with
               | `Sat -> Report.log_error loc msg
           | `Unsat -> Report.log_safe ()
           | `Unknown ->
@@ -1179,6 +1179,12 @@ let resource_bound_analysis file =
     end
   | _ -> assert false
 
+
+let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
+
+
+
 let _ =
   CmdLine.register_config
     ("-cra-no-forward-inv",
@@ -1203,6 +1209,13 @@ let _ =
          let open SolvablePolynomial in
          K.domain := (module ProductWedge(SolvablePolynomialPeriodicRational)(WedgeGuard))),
      " Use periodic rational spectral decomposition");
+  CmdLine.register_config
+    ("-cra-array-front",
+     Arg.Unit (fun () ->
+         let open Iteration in
+         K.domain := (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
+      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)),
+     " Use Arr abstraction");
   CmdLine.register_config
     ("-cra-vas",
      Arg.Unit (fun () ->
@@ -1268,10 +1281,6 @@ let _ =
     ("-precondition",
      Arg.Clear precondition,
      " Synthesize mortal preconditions")
-
-let ad = (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
-      (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)
-
 
 (*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
 i*)
