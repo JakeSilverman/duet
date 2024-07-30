@@ -46,7 +46,7 @@ module Make
 
     val prop_symbols : fp -> Symbol.Set.t
 
-    module type Absd = Abstract.MakeAbstractRSY(C).Domain
+    (*module type Absd = Abstract.MakeAbstractRSY(C).Domain*)
 
     (** [check srk fp pd] returns unknown if a query relation can
      * be reached in the fp where recursion over-approximated using the 

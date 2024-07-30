@@ -1350,7 +1350,6 @@ let _ =
          K.domain := (module ProductWedge(SolvablePolynomialPeriodicRational)(WedgeGuard))),
      " Use periodic rational spectral decomposition");
   CmdLine.register_config
-<<<<<<< HEAD
     ("-cra-refine",
      Arg.Set cra_refine,
      " Turn on loop refinement");
@@ -1358,14 +1357,13 @@ let _ =
     ("-cra-refine-full",
     Arg.Unit (fun () -> cra_refine := true; K.CRARefinement.refine_full := true),
     " Turn on unrestricted loop refinement");
-=======
+  CmdLine.register_config
     ("-cra-array-front",
      Arg.Unit (fun () ->
          let open Iteration in
          K.domain := (module Pmfa.OldPmfa.Array_analysis(Product(LossyTranslation)(PolyhedronGuard))
       (Product(GuardedTranslation)(PolyhedronGuard)): PreDomain)),
      " Use Arr abstraction");
->>>>>>> 7c2a9d48 (pmfa front end)
   CmdLine.register_config
     ("-cra-vas",
      Arg.Unit (fun () ->

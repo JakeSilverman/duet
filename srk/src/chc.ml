@@ -142,7 +142,7 @@ module Make
 
 
     
-    let substitute_rel (conc, hypo_props, constr) substs =
+    (*let substitute_rel (conc, hypo_props, constr) substs =
       List.fold_left2 (fun (constr, param_counter) prop subst ->
           let num_params = List.length (Proposition.typ_of_params prop) in
           match subst with
@@ -172,7 +172,7 @@ module Make
         (conc :: hypo_props) 
         substs
     |> fst
-
+*)
 
 
     let rec edge weights src dst =
@@ -422,7 +422,7 @@ module Make
       | `Add (edge1, edge2) -> omega_add edge1 edge2
 
 
-    let over_approx_arrays phi =
+    (*let over_approx_arrays phi =
       let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
       let bools = Memo.memo (fun _ -> mk_symbol srk `TyBool) in
       let mk_op op =
@@ -442,8 +442,8 @@ module Make
           mk_const srk (bools (`Atom(`ArrEq(a, b))))
         | open_formula -> Formula.construct srk open_formula
       in
-      Formula.eval srk alg phi
-
+      Formula.eval srk alg phi*)
+(*
     module Abs = Abstract.MakeAbstractRSY(C)
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
@@ -579,6 +579,7 @@ module Make
       in
       let entry = start_vert in
       WG.forward_analysis wg ~entry ~update ~init, sym_to_ind
+*)
 
     (* This function converts each stratum of a super-linear CHC to a weighted
      * graph and then computes a path expression that over-approximates the 
@@ -1519,9 +1520,9 @@ module Make
 
             let offset_formula = mk_and srk subchc_formula in
             Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
-            let solver = Smt.mk_solver srk in
-            Smt.Solver.add solver [offset_formula];
-            match Smt.Solver.get_model solver with
+            let solver = Smt.StdSolver.make srk in
+            Smt.StdSolver.add solver [offset_formula];
+            match Smt.StdSolver.get_model solver with
             | `Unsat 
             | `Unknown -> 
               failwith "Cannot determine offsets"

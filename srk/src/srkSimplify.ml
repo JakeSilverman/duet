@@ -324,7 +324,7 @@ let simplify_dda srk phi =
   let phi = 
     substitute srk (fun fv -> mk_const srk (fvs_to_syms fv)) phi 
   in 
-  let solver = Smt.mk_solver srk in
+  let solver = Smt.Solver.make srk in
   let rec simplify_children star children =
     let changed = ref false in
     let rec go simplified = function

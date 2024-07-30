@@ -1211,10 +1211,9 @@ let predicate_at_most_once srk pred1 pred2 opts tf =
 
 let phase_mp srk ?(star=None) candidate_predicates tf nonterm =
   let star tf =
-      let module E = (val if get_theory srk = `LIRR then 
-        (module LIRR : PreDomain) 
-      else (module LossyTranslation))
-      in 
+    match star with
+    | None ->
+      let module E = LossyTranslation in
       let k = mk_symbol srk `TyInt in
       let exists x = x != k && (TF.exists tf) x in
       TF.make ~exists

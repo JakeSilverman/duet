@@ -1271,7 +1271,7 @@ module Formula = struct
     | `Atom (`Arith (`Leq, s, t)) -> mk_leq srk s t
     | `Atom (`Arith (`Lt, s, t)) -> mk_lt srk s t
     | `Atom (`ArrEq (s, t)) -> mk_arr_eq srk s t
-    | `Atom (`IsInt s) -> mk_is_int _srk s
+    | `Atom (`IsInt s) -> mk_is_int srk s
     | `Proposition (`Var v) -> mk_var srk v `TyBool
     | `Proposition (`App (f, args)) -> mk_app srk f args
     | `Ite (cond, bthen, belse) -> mk_ite srk (map cond) (map bthen) (map belse)
@@ -1288,7 +1288,7 @@ module Formula = struct
     | `Atom (`Arith (`Leq, s, t)) -> mk_leq srk s t
     | `Atom (`Arith (`Lt, s, t)) -> mk_lt srk s t
     | `Atom (`ArrEq (s, t)) -> mk_arr_eq srk s t
-    | `Atom (`IsInt s) -> mk_is_int _srk s
+    | `Atom (`IsInt s) -> mk_is_int srk s
     | `Proposition (`Var v) -> mk_var srk v `TyBool
     | `Proposition (`App (f, args)) -> mk_app srk f args
     | `Ite (cond, bthen, belse) -> mk_ite srk cond bthen belse
@@ -2108,15 +2108,6 @@ let pp_smtlib2_gen ?(named=false) ?(env=Env.empty) ?(strings=Hashtbl.create 991)
         (go env) cond
         (go env) bthen
         (go env) belse
-    | Select, [a; i] ->
-      fprintf formatter "(select %a %a)"
-        (go env) a
-        (go env) i
-    | Store, [a; i; v] ->
-      fprintf formatter "(store %a %a %a)"
-        (go env) a
-        (go env) i
-        (go env) v
     | IsInt, [s] ->
        fprintf formatter "(is_int %a)" (go env) s
     | _ -> failwith "pp_smtlib2: ill-formed expression"
