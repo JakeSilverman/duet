@@ -1491,8 +1491,10 @@ let array_analyze file =
 
   let init = time () in
   let fp = CHC.ChcSrkZ3.parse_file file.filename in
-  let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
+  Log.errorf "ORIG FP is %a" CHC.Fp.pp fp;
  
+  let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
+  Log.errorf "ELIM ITE FP is %a" CHC.Fp.pp fp;
   let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
   let offsetdone = time () in
   diff init offsetdone "offset done";

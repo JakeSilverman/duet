@@ -1785,7 +1785,7 @@ let purify_expr srk filter ?(label=fun _ -> "") =
         (Expr.HT.enum table)
     in
     (expr', map)
-
+(*
 let eliminate_term srk filter ?(label=fun _ -> "") gen_equiv (qf_phi : 'a formula) =
   let (phi', map) =
     purify_expr srk filter ~label qf_phi
@@ -1796,8 +1796,8 @@ let eliminate_term srk filter ?(label=fun _ -> "") gen_equiv (qf_phi : 'a formul
       map
       []
   in
-  mk_and srk (phi' :: equivalences)
-
+  mk_and srk (phi' :: equivalences)*)
+(*
 let eliminate_ite srk phi =
   let filter expr =
     match destruct srk expr with
@@ -1821,6 +1821,125 @@ let eliminate_ite srk phi =
     | _ -> assert false
   in
   eliminate_term srk filter ~label gen_equiv phi
+*)
+
+
+let eliminate_ite srk phi =
+  let rec map_ite f ite =
+    match ite with
+    | `Term t -> f t
+    | `Ite (cond, bthen, belse) ->
+      `Ite (cond, map_ite f bthen, map_ite f belse)
+  in
+  let mk_ite cond bthen belse =
+    mk_or srk [mk_and srk [cond; bthen];
+               mk_and srk [mk_not srk cond; belse]]
+  in
+  let rec ite_formula ite =
+    match ite with
+    | `Term phi -> phi
+    | `Ite (cond, bthen, belse) ->
+      mk_ite cond (ite_formula bthen) (ite_formula belse)
+  in
+  let rec promote_ite term =
+    match Term.destruct srk term with
+    | `Ite (cond, bthen, belse) ->
+      `Ite (elim_ite cond, promote_ite bthen, promote_ite belse)
+    | `Real _ | `Var (_, _) -> `Term term
+    | `Add xs -> map_ite (fun xs -> `Term (mk_add srk xs)) (ite_list xs)
+    | `Mul xs -> map_ite (fun xs -> `Term (mk_mul srk xs)) (ite_list xs)
+    | `Binop (`Div, x, y) ->
+      let promote_y = promote_ite y in
+      map_ite
+        (fun t -> map_ite (fun s -> `Term (mk_div srk t s)) promote_y)
+        (promote_ite x)
+    | `Binop (`Mod, x, y) ->
+      let promote_y = promote_ite y in
+      map_ite
+        (fun t -> map_ite (fun s -> `Term (mk_mod srk t s)) promote_y)
+        (promote_ite x)
+    | `Unop (`Neg, x) ->
+      map_ite (fun t -> `Term (mk_neg srk t)) (promote_ite x)
+    | `Unop (`Floor, x) ->
+      map_ite (fun t -> `Term (mk_floor srk t)) (promote_ite x)
+    | `Store (a, v, i) ->
+      let promote_i = promote_ite i in
+      let promote_v = promote_ite v in
+      map_ite
+        (fun t ->
+           map_ite
+             (fun s -> map_ite (fun u -> `Term (mk_store srk t s u)) promote_i)
+             promote_v)
+        (promote_ite a)
+    | `Select (x, y) ->
+      let promote_y = promote_ite y in
+      map_ite
+        (fun t -> map_ite (fun s -> `Term (mk_select srk t s)) promote_y)
+        (promote_ite x)
+    | `App (func, args) ->
+      List.fold_right (fun x rest ->
+          match Expr.refine_coarse srk x with
+          | `Formula phi ->
+            let phi = elim_ite phi in
+            map_ite (fun xs -> `Term (phi::xs)) rest
+          | `Term t ->
+            map_ite
+              (fun t -> map_ite (fun xs -> `Term (t::xs)) rest)
+              (promote_ite t))
+        args
+        (`Term [])
+      |> map_ite (fun args -> `Term (mk_app srk func args))
+  and ite_list xs =
+    List.fold_right (fun x ite ->
+        map_ite
+          (fun x_term -> map_ite (fun xs -> `Term (x_term::xs)) ite)
+          (promote_ite x))
+      xs
+      (`Term [])
+  and elim_ite phi =
+    let alg = function
+      | `Tru -> mk_true srk
+      | `Fls -> mk_false srk
+      | `And xs -> mk_and srk xs
+      | `Or xs -> mk_or srk xs
+      | `Not phi  -> mk_not srk phi
+      | `Quantify (`Exists, name, typ, phi) -> mk_exists srk ~name typ phi
+      | `Quantify (`Forall, name, typ, phi) -> mk_forall srk ~name typ phi
+      | `Ite (cond, bthen, belse) -> mk_ite cond bthen belse
+      | `Atom (`Arith (op, s, t)) ->
+        let promote_t = promote_ite t in
+        map_ite
+          (fun s -> map_ite (fun t -> `Term (mk_compare op srk s t)) promote_t)
+          (promote_ite s)
+        |> ite_formula
+      | `Atom (`ArrEq (s, t)) ->
+        let promote_t = promote_ite t in
+        map_ite
+          (fun s -> map_ite (fun t -> `Term (mk_arr_eq srk s t)) promote_t)
+          (promote_ite s)
+        |> ite_formula
+      | `Atom (`IsInt s) ->
+         map_ite (fun s -> `Term (mk_is_int srk s)) (promote_ite s)
+         |> ite_formula
+      | `Proposition (`Var i) -> mk_var srk i `TyBool
+      | `Proposition (`App (func, args)) ->
+        List.fold_right (fun x rest ->
+            match Expr.refine_coarse srk x with
+            | `Formula phi ->
+              let phi = elim_ite phi in
+              map_ite (fun xs -> `Term (phi::xs)) rest
+            | `Term t ->
+              map_ite
+                (fun t -> map_ite (fun xs -> `Term (t::xs)) rest)
+                (promote_ite t))
+          args
+          (`Term [])
+        |> map_ite (fun args -> `Term (mk_app srk func args))
+        |> ite_formula
+    in
+    Formula.eval srk alg phi
+  in
+  elim_ite phi
 
 let eliminate_arr_eq srk phi =
   let alg = function
