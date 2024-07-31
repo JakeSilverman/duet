@@ -1976,7 +1976,7 @@ module SolvablePolynomialLIRR = struct
       Format.fprintf formatter "x_%d'" (i - offset)
 
 
-  let exp_ti it = 
+  let exp_ti _it =  failwith "lib error" (*
     let it_offset = TransitionIdeal.get_dim it.ideal in
     let ideal = TransitionIdeal.get_ideal it.ideal in
     logf "Exponentiating : %a" (TransitionIdeal.pp (pp_dim it_offset)) it.ideal;
@@ -2025,7 +2025,7 @@ module SolvablePolynomialLIRR = struct
               Id.intersect transient_closure (get_rels_after_inv_transient 0 zero_eig_transient)
           in
           TransitionIdeal.make it_offset (Id.mk_rewrite cl))
-      
+      *)
 
 
   let exp srk tr_symbols loop_count it =

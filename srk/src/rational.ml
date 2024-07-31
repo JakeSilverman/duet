@@ -216,7 +216,7 @@ end) = struct
 
   let of_exponential e = {ep = E.of_exponential e; heaviside = IM.empty}
 
-  let of_exponential_poly e p = {ep = E.mul (E.of_exponential e) (E.of_polynomial p); heaviside = IM.empty}
+  (*let of_exponential_poly e p = {ep = E.mul (E.of_exponential e) (E.of_polynomial p); heaviside = IM.empty}
 
   let of_heavy shift c = 
     if shift = 0 then
@@ -225,7 +225,7 @@ end) = struct
       zero
     else
       {ep = E.zero; heaviside = IM.add shift c IM.empty}
-
+*)
   let scalar_mul c term = 
     if C.equal c C.zero then
       zero
@@ -264,7 +264,7 @@ end) = struct
     in
     IM.fold heavy_eval a.heaviside ep_eval
 
-  let shift n e = 
+  (*let shift n e = 
     let shift_poly p =
       BatEnum.fold (
         fun acc (c, pow) ->
@@ -281,9 +281,9 @@ end) = struct
       else add acc (of_heavy (shift-n) c)
     in
     BatEnum.fold shift_heavy_add shifted_ep (IM.enum e.heaviside)
-    
+    *)
 
-  let shift_remove_heavys earr = 
+  (*let shift_remove_heavys earr = 
     let biggest_heavy e = 
       if IM.is_empty e.heaviside then 0 
       else fst (IM.max_binding e.heaviside)
@@ -291,7 +291,7 @@ end) = struct
     let biggest = Array.fold_left (fun acc e -> max acc (biggest_heavy e)) (-1) earr in
     let transient = List.init biggest (fun i -> Array.map (fun e -> eval e i) earr) in
     transient, biggest, Array.map (shift biggest) earr
-
+*)
 
   (*TODO mul*)
 
@@ -320,6 +320,7 @@ end) = struct
 
 end
 
+(*
 module type ExpPolyNF = sig
   module NF : NumberField.NF
 
@@ -368,7 +369,8 @@ module type ExpPolyNF = sig
 
   val long_run_algebraic_relations : unit -> QQXs.t array list * int * QQXs.t list
 end
-
+*)
+(*
 module MakeConstRing (
   R : sig 
     include Algebra.Ring 
@@ -376,13 +378,13 @@ module MakeConstRing (
   end) = struct
   include MakeMultivariate(R)
   
-  let int_mul i = scalar_mul (R.lift (QQ.of_int i))
+  (*let int_mul i = scalar_mul (R.lift (QQ.of_int i))*)
 
-end
+end*)
 
 open Polynomial
 
-module MakeEPNF(NF : NumberField.NF) (*: ExpPolyNF with module NF = NF*) = struct
+(*module MakeEPNF(NF : NumberField.NF) (*: ExpPolyNF with module NF = NF*) = struct
   module NF = NF
 
   module ConstRing = MakeConstRing(struct include NF let lift = NF.of_rat end)
@@ -539,7 +541,7 @@ module MakeEPNF(NF : NumberField.NF) (*: ExpPolyNF with module NF = NF*) = struc
     (transient, shift, deshifted)
 
 
-end 
+end *)
 
 module RX = MakeRat(struct
   include QQX
@@ -1114,7 +1116,7 @@ module RatEP = struct
       let b_rs = BatEnum.fold RS.add RS.zero (BatEnum.append (BatEnum.append b_ep_rs b_iifs_rs) b_heavy_rs) in
       translate_rs (had_mult a_rs b_rs)
 
-
+(*
   let to_nf eps = 
     let all_iifs = Array.fold_left (fun acc ep -> BatEnum.append acc (IIFS.keys ep.iifs)) (BatEnum.empty ()) eps in
     let sf = 
@@ -1232,7 +1234,8 @@ module RatEP = struct
     EP.set_rec_sols eps_nf;
     let ep = (module EP : ExpPolyNF) in
     ep
-  
+  *)
+
   let exp a i = 
     SrkUtil.exp mul one a i
 

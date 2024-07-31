@@ -74,7 +74,7 @@ module MakeRatDiff
     val qr : N.t -> D.t -> N.t * N.t
   end) : RationalFunc with type num = N.t and type den = D.t
 
-
+(*
 (**Exponential polynomials with heavyside terms over a number field as solutions to a solvable polynomial.*)
 module type ExpPolyNF = sig
   (**The number field from which elements are drawn from*)
@@ -141,7 +141,7 @@ module type ExpPolyNF = sig
   val long_run_algebraic_relations : unit -> Polynomial.QQXs.t array list * int * Polynomial.QQXs.t list
 
 end
-
+*)
 module ConstRingX : Polynomial.Univariate with type scalar = Polynomial.QQXs.t
 
 (** Rational exponential polynomials with heavyside and IIFS.*)
@@ -184,6 +184,6 @@ module RatEP : sig
 
   val solve_rec : ?initial:Q.t option array option -> TransitionIdeal.block list -> t array
 
-  val to_nf : t array -> (module ExpPolyNF)
+  (*val to_nf : t array -> (module ExpPolyNF)*)
 
 end
