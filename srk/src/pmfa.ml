@@ -993,14 +993,14 @@ does this affect *)
       in
 
       let write = mk_and srk [obj.ground_lia; mk_not srk arr_vars_eq] in
-      let polka = Polka.manager_alloc_loose () in
+      (*let polka = Polka.manager_alloc_loose () in*)
       let write =
        rewrite srk ~down:(nnf_rewriter srk) write
       in
       let rewrite_time = time "EXP IN" in
       diff t1 rewrite_time "REWRITE"; 
 
-      let conv = 
+      (*let conv = 
         SrkApron.formula_of_property 
           (Abstract.abstract 
              srk 
@@ -1008,7 +1008,7 @@ does this affect *)
              polka 
              write) 
       in
-      let _write = conv in
+      let _write = conv in*)
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
 
