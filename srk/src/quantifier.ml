@@ -2352,7 +2352,7 @@ let quant_free srk phi =
 
 
 
-let miniscope2 srk phi : 'a formula =
+let miniscope srk phi : 'a formula =
   (* The miniscoping procedure works in two phases:
    * the first phase pushes quantifier nodes of the input formula tree deeper
    * into the tree (sometimes removing the quantifier altogether) 
@@ -2485,7 +2485,7 @@ let miniscope2 srk phi : 'a formula =
       | `Atom _, Some(jtyp, c)  | `Proposition _, Some (jtyp, c) | `Ite _, Some (jtyp, c) -> 
         mk_quant qtyp name typ (mk_junct jtyp [phi; c])
       | `Not phi, None -> mk_not srk (pushdown (flip qtyp) name typ None phi)
-      | `Not _, Some (jtyp, c) ->
+      | `Not phi, Some (jtyp, c) -> 
         mk_not srk (pushdown (flip qtyp) name typ (Some (flipj jtyp, mk_not srk c)) phi)
       | `And juncts, _ -> handle_juncts `And juncts
       | `Or juncts, _ -> handle_juncts `Or juncts
@@ -2519,7 +2519,7 @@ let miniscope2 srk phi : 'a formula =
 
 
 
-let miniscope srk phi : 'a formula =
+let miniscope2 srk phi : 'a formula =
   (* The miniscoping procedure works in two phases:
    * the first phase pushes quantifier nodes of the input formula tree deeper
    * into the tree (sometimes removing the quantifier altogether) 
@@ -2765,7 +2765,6 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs_filt in
           eqs', diseqs', fv_tru', fv_fls', phi' 
         | Some (ind, term) ->
-          Log.errorf "Subst ind %n with term %a" ind (Expr.pp srk) term;
           (* mk_false should never be substitutable here *)
           let term' = subst term ind (mk_false srk) in
           let sub_pairs lst = 
@@ -2777,8 +2776,6 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
           let phi' = subst phi ind term' in
-          Log.errorf "OG WAS %a" (Formula.pp srk) phi;
-          Log.errorf "RESULT IS %a" (Formula.pp srk) phi';
           perform_subst
             cands'
             (BatList.remove_at ind qt_infos)
@@ -2985,7 +2982,6 @@ let normalized_intersection srk lsts =
 
 
 let eq_guided_qe_helper srk phi =
-  Log.errorf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
   let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
   let intersect lsts = normalized_intersection srk lsts in

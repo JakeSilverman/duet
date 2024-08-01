@@ -239,7 +239,6 @@ module Make
       match x with
       | Edge (p_c, p_h, phi) ->
 
-        Log.errorf "PHI ENTRY is %a" (Formula.pp srk) phi;
         let t1 = time "Star Enter" in
 
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
@@ -293,7 +292,6 @@ module Make
             (Quantifier.miniscope srk phi')
         in
         let syms = Memo.memo (fun (ind, typ) ->
-            Log.errorf "looking for sym %n" ind;
             let name = 
               if ind < List.length p_c then (
                 (fst (List.nth p_c ind))^"'")
@@ -309,7 +307,6 @@ module Make
             phi'
         in
         let phi' = Quantifier.eq_guided_elim_loop srk phi' in
-        Log.errorf "PHI' is %a" (Formula.pp srk) phi';
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
         (*if t3 -. t1 > 100.1 then assert false else ();*)
@@ -331,7 +328,6 @@ module Make
     let omega edge =
       match edge with
       | Edge (p_c, p_h, phi) ->
-        Log.errorf "PHI IS %a" (Formula.pp srk) phi;
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
         let var_to_sym = Hashtbl.create 97 in
         let trs = 
@@ -368,10 +364,7 @@ module Make
             srk
             (Quantifier.miniscope srk phi')
         in
-        Log.errorf "OMEGA IS %a" (Formula.pp srk) phi';
-        Log.errorf "Size of p_h is %n and p_c is %n" (List.length p_h) (List.length p_c);
         let syms = Memo.memo (fun (ind, typ) ->
-            Log.errorf "looking for sym %n" ind;
             let name = fst (List.nth p_h ind) in
             let s = mk_symbol srk ~name (typ :> typ)  in
             mk_const srk s)
@@ -889,7 +882,7 @@ module Make
                if Proposition.symbol_of hd = Proposition.symbol_of c &&
                   (BatString.exists (show_symbol srk (Proposition.symbol_of c)) "empty.loop")
                then
-                 (Log.errorf "EMPTY LOOP found"; false)
+                 ( false)
                else true
              | _ -> true)
           rules
@@ -1052,7 +1045,6 @@ module Make
       in
       let rule_clauses =
         List.map (fun (conc, hypo, constr) ->
-            Log.errorf "DET EQ constr is %a" (Formula.pp srk) constr;
             let chcvar_of_fv = Hashtbl.create 97 in
             let congruent_fvs = 
               BatArray.make (List.length (Proposition.names_of conc)) [] 
@@ -1085,9 +1077,7 @@ module Make
             let unusables = List.flatten unusables in
             let make_edges (non_conc_fvs, conc_fvs) =
               List.fold_left (fun edges conc_fv ->
-                  Log.errorf "IN REL %a" (Formula.pp srk) (term_of conc_fv);
                   (List.map (fun non_conc_fv ->
-                       Log.errorf "NON COnc %a" (Formula.pp srk) (term_of non_conc_fv);
                        try mk_and srk [term_of conc_fv; term_of non_conc_fv] with
                        | _ -> mk_false srk) 
                       non_conc_fvs) @
@@ -1106,7 +1096,6 @@ module Make
                 srk
                 (List.map (fun fv -> (mk_not srk (term_of fv))) unusables)
             in
-            Log.errorf "phi is %a" (Formula.pp srk) edges_phi;
             mk_and srk [edges_phi; inconsist_clause]) 
           (Fp.get_rules fp)
       in
@@ -1512,14 +1501,11 @@ module Make
                   (BatSet.Int.mem ind full_painted))
                 fp
             in
-            Log.errorf "CHC here is %a" Fp.pp fp;
             let subchc_formula = 
               create_offset_formula subchc symb_rel_params offsetcands 
             in
-            List.iter (fun sub -> Log.errorf "Sub formula is %a" (Formula.pp srk) sub) subchc_formula;
 
             let offset_formula = mk_and srk subchc_formula in
-            Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
             let solver = Smt.StdSolver.make srk in
             Smt.StdSolver.add solver [offset_formula];
             match Smt.StdSolver.get_model solver with
@@ -1573,7 +1559,6 @@ module Make
 
 
     let rec check_q_array phi =
-      Log.errorf "phi is %a" (Formula.pp srk) phi;
       match Formula.destruct srk phi with
       | `Quantify (qtyp, name, typ, phi) ->
         if typ = `TyArr then assert false
@@ -1643,14 +1628,6 @@ module Make
 
 
     let apply_offset_candidate constr offsets =
-      Log.errorf "Constr is %a" (Formula.pp srk) constr;
-      Hashtbl.iter (fun k v -> 
-        match k, v with
-          | Sym sym, Some v -> Log.errorf "Sym is %a and offset is %n" (pp_symbol srk) sym v
-          | Fv fv, Some v -> Log.errorf "Fv is %n and offset is %n " fv v
-          | Sym sym, None -> Log.errorf "Sym is %a and offset is NONE" (pp_symbol srk) sym 
-          | Fv fv, None -> Log.errorf "Fv is %n and offset is NONE " fv)
-         offsets;
       let rec apply_offset_formula = function
         | `Atom (`Arith (op, s, t)) ->
           let op = match op with | `Eq -> mk_eq | `Lt -> mk_lt | `Leq -> mk_leq in
@@ -1682,7 +1659,6 @@ module Make
         | `App (sym, []) ->
           mk_const srk sym, (BatHashtbl.find_option offsets (Sym sym))
         | `Var (ind, typ) ->
-          Log.errorf "Need offset for var %n" ind;
           mk_var srk ind (typ :> typ_fo), (BatHashtbl.find_option offsets (Fv ind))
         | `Store ((a, offset), i, v) ->
           let i = ArithTerm.eval srk apply_offset_arith i in
@@ -1951,7 +1927,6 @@ module Make
           Classes (singletons @ intscts)
 
       let abstract phi fvs =
-        Log.errorf "ABSTRACT ENTERED with %n fv" (BatSet.Int.cardinal fvs);
         let syms_to_fvs = Hashtbl.create 97 in
         let fvs_to_syms = Memo.memo (fun (ind, typ) -> 
             let sym = mk_symbol srk ~name:"DET EQS" (typ :> typ) in
@@ -1994,7 +1969,6 @@ module Make
               |> BatSet.Int.of_list)
             cells_syms
         in
-        Log.errorf "Size of cells is %n" (List.length cells_fvs);
         Classes cells_fvs
 
       let equal equivs1 equivs2 =
@@ -2159,7 +2133,6 @@ module Make
       in
 
       Fp.map_rules (fun (conc, hypos, constr) ->
-          Log.errorf "Rule is %a" (Fp.pp_rule) (conc, hypos, constr);
           let constr', _, props, _ = 
             List.fold_left (fun (constr, param_counter, props, total_reduced) prop ->
                 let num_params = List.length (Proposition.typ_of_params prop) in
@@ -2264,7 +2237,6 @@ module Make
 
       let fp = coalesce_eqs fp'3 invs in 
 
-      Log.errorf "\n\n\n\n\n\nn\n\\nn\n\n\n\n\n\n\n\n\n\n\n\n\n";
       Log.errorf "NEW FP is %a" Fp.pp fp;
       fp
 
