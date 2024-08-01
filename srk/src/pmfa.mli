@@ -12,7 +12,6 @@ module OldPmfa : sig
 
 
 
-  val unbooleanize : 'a context -> 'a formula -> 'a formula
 
   (* [projection srk tf] returns [(j, j', map, tf')] where [tf'] is a
    * projection of the transition formula [tf] such that for any array

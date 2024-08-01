@@ -10,15 +10,7 @@ let time _ =
 let diff t1 t2 s = 
   Log.errorf "\n%s Execution time: %fs\n" s (t2 -. t1)
 
-let typ_symbol_fo srk sym =
-    match typ_symbol srk sym with
-    | `TyInt -> `TyInt
-    | `TyReal -> `TyReal
-    | `TyBool -> `TyBool
-    | `TyArr -> `TyArr
-    | _ -> assert false
-
- let eliminate_stores srk phi =
+let eliminate_stores srk phi =
   let mk_op op =
     match op with
     | `Eq -> mk_eq
