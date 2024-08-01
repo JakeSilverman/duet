@@ -58,47 +58,6 @@ let typ_symbol_fo srk sym =
 
 
 
-(* Replace this function in unbooleanize then delete *)
-let skolemize srk phi =
-  let decapture_tbl = BatHashtbl.create 97 in
-  let subst = 
-    Memo.memo (fun (ind, typ) ->
-        let sym = mk_symbol srk ~name:"SKOLEM" (typ :> typ) in
-        BatHashtbl.add decapture_tbl sym ind;
-        mk_const srk sym)
-  in
-  let phi = 
-    substitute
-      srk
-      subst phi
-  in
-  let rec subst_existentials subst_lst expr =
-    match Formula.destruct srk expr with
-    | `Quantify (`Exists, name, typ, phi) ->
-      subst_existentials ((mk_symbol srk ~name (typ :> typ)) :: subst_lst) phi
-    | `And conjuncts ->
-      mk_and srk (List.map (subst_existentials subst_lst) conjuncts)
-    | `Or disjuncts ->
-      mk_or srk (List.map (subst_existentials subst_lst) disjuncts)
-    | open_form ->
-      (* TODO: make substitute more efficient *)
-      substitute
-        srk
-        (fun (i, _) -> 
-             mk_const srk (List.nth subst_lst i))
-        (Formula.construct srk open_form)
-  in
-  substitute_sym
-    srk
-    (fun sym ->
-       if Hashtbl.mem decapture_tbl sym then
-         mk_var srk (Hashtbl.find decapture_tbl sym) (typ_symbol_fo srk sym)
-       else mk_const srk sym)
-    (subst_existentials [] phi)
-
-
-
-
 module OldPmfa = struct
   open Syntax
   open Iteration
@@ -643,40 +602,6 @@ module OldPmfa = struct
 
 
 
- (* Changes bool syms to int syms... when I wrote this some of the other functions
-  * in this module failed with presence of booleans. Need to check if this is still the
-  * case if not just fix this. This function messes with types of tr_symbols are that
-  * worries me*)
- let unbooleanize srk phi =
-      let phi = skolemize srk phi in 
-      let symbols = symbols phi in
-      let map = Hashtbl.create 97 in
-      Symbol.Set.iter (fun ele ->
-          let int_sym = mk_symbol srk ~name:(show_symbol srk ele) `TyInt in
-          Hashtbl.add map ele int_sym)
-        (Symbol.Set.filter (fun ele -> typ_symbol srk ele = `TyBool) symbols);
-      let phi_subst = 
-        substitute_const 
-          srk
-          (fun s -> 
-             if BatHashtbl.mem map s then
-               mk_eq srk (mk_one srk) (mk_const srk (BatHashtbl.find map s))
-             else
-               mk_const srk s)
-          phi
-      in
-      let bool_constrs =
-        BatHashtbl.fold (fun _ sym acc -> 
-            mk_or 
-              srk 
-              [mk_eq srk (mk_const srk sym) (mk_one srk);
-               mk_eq srk (mk_const srk sym) (mk_zero srk)] :: acc)
-          map
-          []
-      in
-      mk_and srk (phi_subst :: bool_constrs) 
-
-
   module Array_analysis (Iter : PreDomain) (Iter2 : PreDomain) = struct
 
     type 'a t = 
@@ -836,7 +761,7 @@ module OldPmfa = struct
 
     let abstract srk tf =
       Log.errorf "ANSTRACT?";
-      Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/duetpmfa/duet/in_abs.smt2";
+      Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/arraysmttests/in_abs.smt2";
       let t1 = time "In abstract" in
 
 
@@ -903,7 +828,6 @@ does this affect *)
 
 
     let phi = eliminate_ite srk phi in
-    let phi = unbooleanize srk phi in
 
 
     let tf_pmfa = T.update_formula tf phi in
@@ -1092,13 +1016,14 @@ does this affect *)
 
       let nstarwnstar = Quantifier.eq_guided_elim_loop srk nstarwnstar in
 
-      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/duetpmfa/duet/pre_mbp_1.smt2";
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/pre_mbp_1.smt2";
 
 
       let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
-      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/duetpmfa/duet/post_mbp_1.smt2";
-
-
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/post_mbp_1.smt2";
+      let nstarwnstar = SrkSimplify.simplify_terms srk nstarwnstar in
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/arraysmttests/simplif.smt2";
+ 
 
 
      let nstarmbp = time "nstar" in
@@ -1133,11 +1058,11 @@ does this affect *)
       let nstar = mk_and srk [nstar; nstar2] in
       let nstar = mk_exists_const srk loop_c nstar in
 
-       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/duetpmfa/duet/nstar.smt2";
+       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar.smt2";
 
      
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
-      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/duetpmfa/duet/nstar_mbp.smt2";
+      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/arraysmttests/nstar_mbp.smt2";
 
  
 
@@ -1202,7 +1127,7 @@ does this affect *)
       let t2 = time "EXP OUT" in
       diff t1 t2 "EXP";
       let res = mk_and srk (res ::  (eqs_2 @ eqs3)) in
-      Syntax.to_file srk res "/Users/jakesilverman/Documents/duetpmfa/duet/exp_res.smt2";
+      Syntax.to_file srk res "/Users/jakesilverman/Documents/arraysmttests/exp_res.smt2";
       Log.errorf "Sleeping";
       (*Unix.sleepf 5.;*)
       res
