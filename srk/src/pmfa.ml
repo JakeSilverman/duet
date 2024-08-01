@@ -835,6 +835,8 @@ module OldPmfa = struct
 
 
     let abstract srk tf =
+      Log.errorf "ANSTRACT?";
+      Syntax.to_file srk (T.formula tf) "/Users/jakesilverman/Documents/duetpmfa/duet/in_abs.smt2";
       let t1 = time "In abstract" in
 
 
@@ -986,22 +988,12 @@ does this affect *)
       in
 
       let write = mk_and srk [obj.ground_lia; mk_not srk arr_vars_eq] in
-      (*let polka = Polka.manager_alloc_loose () in*)
       let write =
        rewrite srk ~down:(nnf_rewriter srk) write
       in
       let rewrite_time = time "EXP IN" in
       diff t1 rewrite_time "REWRITE"; 
 
-      (*let conv = 
-        SrkApron.formula_of_property 
-          (Abstract.abstract 
-             srk 
-             ~exists:(fun s -> Symbol.Set.mem s (symbols write) && not (Symbol.Set.mem s obj.skolems))
-             polka 
-             write) 
-      in
-      let _write = conv in*)
 
       let noop = mk_and srk [obj.ground_lia; arr_vars_eq] in 
 
@@ -1026,7 +1018,7 @@ does this affect *)
       let nstarwnstar = 
         if at_most_single_write srk write noop obj.iter_trs 
         then (
-          let noop_star1 =
+          let noop_star =
             T.make
               (Iter.exp
                  srk 
@@ -1039,36 +1031,11 @@ does this affect *)
                     noop))
               obj.iter_trs
           in
-          let noop_star1 = T.map_formula (mk_exists_const srk exp1) noop_star1 in
-          let noop_star2 =
-            T.make
-              (Iter.exp
-                 srk 
-                 obj.iter_trs 
-                 (mk_const 
-                    srk 
-                    exp2)
-                 (Iter.abstract 
-                    srk 
-                    noop))
-              obj.iter_trs
-          in
-          let noop_star2 = T.map_formula (mk_exists_const srk exp2) noop_star2 in
+          let noop_star = T.map_formula (mk_exists_const srk exp1) noop_star in
  
           let write_once = 
-            T.mul srk noop_star1 (T.mul srk write noop_star2)
+            T.mul srk noop_star (T.mul srk write noop_star)
           in
-          (*let lc_constr = 
-            mk_and srk 
-              [mk_eq
-                 srk
-                 lc
-                 (mk_add srk [mk_const srk exp1;
-                              mk_const srk exp2;
-                              mk_int srk 1]);
-                 mk_leq srk (mk_zero srk) (mk_const srk exp1);
-               mk_leq srk (mk_zero srk) (mk_const srk exp2)]
-          in*)
           mk_and 
             srk 
             [mk_exists_consts 
@@ -1125,9 +1092,11 @@ does this affect *)
 
       let nstarwnstar = Quantifier.eq_guided_elim_loop srk nstarwnstar in
 
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/duetpmfa/duet/pre_mbp_1.smt2";
+
 
       let nstarwnstar = Quantifier.mbp_qe_inplace srk nstarwnstar in
-
+      Syntax.to_file srk nstarwnstar "/Users/jakesilverman/Documents/duetpmfa/duet/post_mbp_1.smt2";
 
 
 
@@ -1164,9 +1133,13 @@ does this affect *)
       let nstar = mk_and srk [nstar; nstar2] in
       let nstar = mk_exists_const srk loop_c nstar in
 
+       Syntax.to_file srk nstar "/Users/jakesilverman/Documents/duetpmfa/duet/nstar.smt2";
 
+     
       let nstar = Quantifier.mbp_qe_inplace srk nstar in
+      Syntax.to_file srk nstar "/Users/jakesilverman/Documents/duetpmfa/duet/nstar_mbp.smt2";
 
+ 
 
       let nstarreal = time "nstarreal" in
 
@@ -1229,6 +1202,9 @@ does this affect *)
       let t2 = time "EXP OUT" in
       diff t1 t2 "EXP";
       let res = mk_and srk (res ::  (eqs_2 @ eqs3)) in
+      Syntax.to_file srk res "/Users/jakesilverman/Documents/duetpmfa/duet/exp_res.smt2";
+      Log.errorf "Sleeping";
+      (*Unix.sleepf 5.;*)
       res
 
 
