@@ -88,7 +88,7 @@ let fresh_dim polys =
          |> (fun d ->
              match d with
              | Some d ->
-               Int.max curr_fresh (d + 1)
+               max curr_fresh (d + 1)
              | None -> curr_fresh))
       Linear.const_dim
       polys in

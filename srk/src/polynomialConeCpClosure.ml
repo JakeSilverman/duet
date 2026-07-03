@@ -29,7 +29,7 @@ module MonomialSet =
 let _highest_dim_in_mono mono =
   BatEnum.fold
     (fun curr (dim, _power) ->
-      Int.max dim curr)
+      max dim curr)
     (Linear.const_dim) (Monomial.enum mono)
 
 let fresh_dim polys =
@@ -41,7 +41,7 @@ let fresh_dim polys =
         |> (fun d ->
          match d with
          | Some d ->
-            Int.max curr_fresh (d + 1)
+            max curr_fresh (d + 1)
          | None -> curr_fresh))
       Linear.const_dim
       polys in
