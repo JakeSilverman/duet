@@ -1280,7 +1280,11 @@ let _ =
   CmdLine.register_config
     ("-precondition",
      Arg.Clear precondition,
-     " Synthesize mortal preconditions")
+     " Synthesize mortal preconditions");
+  CmdLine.register_config
+    ("-array-cra-no-singular",
+     Arg.Clear Pmfa.OldPmfa.use_singular_predicates,
+     " Disable the singular-predicate refinement in array CRA")
 
 (*let ad = (module Pmfa.OldPmfa.Array_analysis(Product(Product(LossyTranslation)(PolyhedronGuard))(Vas))(Product(GuardedTranslation)(PolyhedronGuard)) : PreDomain)
 i*)

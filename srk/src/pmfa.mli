@@ -6,6 +6,7 @@ module OldPmfa : sig
   module M = Linear.QQMatrix
   module Z = Linear.ZZVector
   module T = TransitionFormula
+  val use_singular_predicates : bool ref
   val pmfa_to_lia : 'a context -> 'a formula -> 'a formula * Symbol.Set.t
 
   val unskolemize_int_arr : 'a context -> 'a formula -> 'a formula

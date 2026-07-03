@@ -110,6 +110,8 @@ module OldPmfa = struct
   module T = TransitionFormula
   include Log.Make(struct let name = "srk.array:" end)
 
+  let use_singular_predicates = ref true
+
 
   let arr_trs srk tf = 
     List.filter (fun (s, _) -> typ_symbol srk s = `TyArr) (T.symbols tf)
@@ -1033,7 +1035,7 @@ does this affect *)
       diff rewrite_time prenstar "prenstar";
       
       let nstarwnstar = 
-        if at_most_single_write srk write noop obj.iter_trs 
+        if !use_singular_predicates && at_most_single_write srk write noop obj.iter_trs
         then (
           let noop_star1 =
             T.make
