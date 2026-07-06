@@ -837,38 +837,45 @@ module OldPmfa = struct
 
 
 
-    let abstract srk tf =
+    let abstract_with_equality_transition_opt use_equality_transition_opt srk tf =
       let t1 = time "In abstract" in
 
 
-      let eqs = arr_eqs srk tf in
+      let eqs =
+        if use_equality_transition_opt then arr_eqs srk tf
+        else []
+      in
 
       let trs = ref (T.symbols tf) in
 
       (* this was changed to use pre for map instead of post for term... what
 does this affect *)
       let eqs_trs = 
-        List.fold_left (fun eqs_trs (a, b) ->
-            if List.mem (a, b) (T.symbols tf) then (
-              Symbol.Map.add a b eqs_trs)
-            else if List.mem (b, a) (T.symbols tf) then (
-              Symbol.Map.add a b eqs_trs)
-            else eqs_trs)
-          Symbol.Map.empty
-          eqs
+        if use_equality_transition_opt then
+          List.fold_left (fun eqs_trs (a, b) ->
+              if List.mem (a, b) (T.symbols tf) then (
+                Symbol.Map.add a b eqs_trs)
+              else if List.mem (b, a) (T.symbols tf) then (
+                Symbol.Map.add a b eqs_trs)
+              else eqs_trs)
+            Symbol.Map.empty
+            eqs
+        else Symbol.Map.empty
     in
 
     let eqs_ints_trs = 
-      List.fold_left (fun eqs_trs (a, b) ->
-          if List.mem (a, b) (T.symbols tf) then (
-            trs := BatList.remove !trs (a, b);
-            Symbol.Map.add a b eqs_trs)
-          else if List.mem (b, a) (T.symbols tf) then (
-            trs := BatList.remove !trs (b, a);
-            Symbol.Map.add b a eqs_trs)
-          else eqs_trs)
-        Symbol.Map.empty
-        (int_eqs srk tf)
+      if use_equality_transition_opt then
+        List.fold_left (fun eqs_trs (a, b) ->
+            if List.mem (a, b) (T.symbols tf) then (
+              trs := BatList.remove !trs (a, b);
+              Symbol.Map.add a b eqs_trs)
+            else if List.mem (b, a) (T.symbols tf) then (
+              trs := BatList.remove !trs (b, a);
+              Symbol.Map.add b a eqs_trs)
+            else eqs_trs)
+          Symbol.Map.empty
+          (int_eqs srk tf)
+      else Symbol.Map.empty
     in
 
     (*let eqs_ints_trs = Symbol.Map.empty in*)
@@ -953,6 +960,9 @@ does this affect *)
        skolems;
        symb_consts
       }
+
+    let abstract srk tf =
+      abstract_with_equality_transition_opt true srk tf
 
     let at_most_single_write srk write noop trs =
 
@@ -1186,12 +1196,19 @@ does this affect *)
 
 
 
+      let identity = mk_and srk noop_eqs in
       let exp_res_pre = 
-        mk_or 
-          srk 
-          [mk_and srk noop_eqs;
-            nstar;
-           nstarwnstar] 
+        if !use_singular_predicates then
+          mk_or 
+            srk 
+            [identity;
+              nstar;
+             nstarwnstar]
+        else
+          mk_or
+            srk
+            [identity;
+             nstarwnstar]
       in
 
 
@@ -1335,7 +1352,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
         else
           None
         in*)
-      let abs = AD.abstract srk tf in
+      let abs = AD.abstract_with_equality_transition_opt false srk tf in
 
       let arr_vars_eq = 
         mk_and
