@@ -911,6 +911,7 @@ does this affect *)
 
 
     let phi = eliminate_ite srk phi in
+    let phi = TempElim.eliminate srk phi in
     let phi = unbooleanize srk phi in
 
 
