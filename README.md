@@ -107,6 +107,38 @@ for proving termination, which can be selectively disabled using the
 `-termination-no-X` family of flags (see `./duet.exe --help` for a full list).
 Most of the `-cra-X` family of flags are also compatible with `-termination`.
 
+### AMA array analysis on this branch
+
+AMA accepts SeaHorn array CHCs through `-array-cra` (reachability) and
+`-array-term` (termination). Singular-predicate refinement is enabled by default;
+add `-array-cra-no-singular` for the reachability ablation.
+
+To enable the validated scalar forward-sign pass used in the November 2026
+experiments, pass these options before the analysis option:
+
+```sh
+./duet.exe -array-forward-signs -array-sign-annotation pruned -array-sign-cleanup -array-cra input.smt2
+./duet.exe -array-forward-signs -array-sign-annotation pruned -array-sign-cleanup -array-term input.smt2
+```
+
+Forward signs are opt-in. Every inferred invariant is checked against every
+original CHC rule before strengthening; a failed or inconclusive certificate
+retains the original CHCs. Arrays and quantified constraints remain intact.
+Pruned annotations omit sign facts already implied by the rule and its incoming
+invariants. `-array-sign-cleanup` enables exact formula cleanup after reachability
+summarization; termination already applies that cleanup.
+
+Formula dumps are disabled by default; set `AMA_DUMP_FORMULAS=1` to enable them.
+Set `AMA_PROFILE_FORWARD=1` for optional stage timing and formula-size diagnostics.
+The equality-transition optimization remains disabled in termination analysis.
+Raw `Safe` output does not independently certify the C-to-CHC translation, and
+`UnknownSAT` is not a validated C counterexample.
+
+Focused regression suites are under `srk/test/{chc_unreachable,quantifier_alpha,
+temp_elim,runtime_smoke,forward_sign}`. They cover unreachable loops, consistent
+hashing of quantified formulas, exact cleanup and factoring, formula logging,
+and forward-sign inference, certificate rejection, and annotation pruning.
+
 Architecture
 ============
 Duet is split into several packages:

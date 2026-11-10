@@ -1,0 +1,5 @@
+(tests
+ (names test_runtime_logging test_runtime_cleanup test_runtime_factoring)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk oUnit))

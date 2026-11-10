@@ -2765,7 +2765,7 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs_filt in
           eqs', diseqs', fv_tru', fv_fls', phi' 
         | Some (ind, term) ->
-          Log.errorf "Subst ind %n with term %a" ind (Expr.pp srk) term;
+          Log.formulaf "Subst ind %n with term %a" ind (Expr.pp srk) term;
           (* mk_false should never be substitutable here *)
           let term' = subst term ind (mk_false srk) in
           let sub_pairs lst = 
@@ -2777,8 +2777,8 @@ let eq_guided_qe_new srk phi =
           let diseqs' = sub_pairs diseqs in
           let cands' = sub_pairs cands in
           let phi' = subst phi ind term' in
-          Log.errorf "OG WAS %a" (Formula.pp srk) phi;
-          Log.errorf "RESULT IS %a" (Formula.pp srk) phi';
+          Log.formulaf "OG WAS %a" (Formula.pp srk) phi;
+          Log.formulaf "RESULT IS %a" (Formula.pp srk) phi';
           perform_subst
             cands'
             (BatList.remove_at ind qt_infos)
@@ -2985,7 +2985,7 @@ let normalized_intersection srk lsts =
 
 
 let eq_guided_qe_helper srk phi =
-  Log.errorf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
+  Log.formulaf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
   let changed = ref false in
   let phi = Syntax.eliminate_ite srk phi in
   let intersect lsts = normalized_intersection srk lsts in
@@ -3164,6 +3164,23 @@ let eq_guided_qe srk phi = fst (eq_guided_qe_helper srk phi)
 
 type 'a dumb_factor_typ = Phi of 'a formula | Disj of 'a formula * 'a formula
 let dumb_factor srk  phi =
+  (* Stable structural tie keys; binder annotations and hashcons allocation tags
+     do not participate. Free symbols keep their identities. Keys order choices
+     only: collisions never merge terms or change the factoring rule. *)
+  let keys = Expr.HT.create 991 in
+  let rec key expr =
+    try Expr.HT.find keys expr with Not_found ->
+      let label, children = Expr.destruct_sexpr srk expr in
+      let label = match label with
+        | Exists (_, typ) -> Exists ("", typ)
+        | Forall (_, typ) -> Forall ("", typ)
+        | label -> label
+      in
+      let result = Digest.string
+        (Marshal.to_string (label, List.map key children) [Marshal.No_sharing]) in
+      Expr.HT.add keys expr result;
+      result
+  in
   let phiize dumb_factor =
     match dumb_factor with
     | Phi phi -> phi
@@ -3191,7 +3208,9 @@ let dumb_factor srk  phi =
           disjs;
         fst 
           (BatHashtbl.fold (fun term amnt (max_term, max_amnt) ->
-               if amnt > max_amnt then (term, amnt) else (max_term, max_amnt))
+               if amnt > max_amnt
+                  || (amnt = max_amnt && String.compare (key (term :> ('a, typ_fo) expr)) (key (max_term :> ('a, typ_fo) expr)) < 0)
+               then (term, amnt) else (max_term, max_amnt))
               term_count
               (fst (List.hd disjs), -1))
       in
@@ -3330,6 +3349,7 @@ let _simplify_eq_arith srk phi =
   form_destructor phi
 
 let eq_guided_elim_loop srk phi =
+  let phi = RuntimeSimplify.cheap srk phi in
   let rec helper phi count =
     assert (count <= 100);
     let phi = miniscope srk phi in

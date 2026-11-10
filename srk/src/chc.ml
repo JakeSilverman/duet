@@ -239,7 +239,7 @@ module Make
       match x with
       | Edge (p_c, p_h, phi) ->
 
-        Log.errorf "PHI ENTRY is %a" (Formula.pp srk) phi;
+        Log.formulaf "PHI ENTRY is %a" (Formula.pp srk) phi;
         let t1 = time "Star Enter" in
 
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
@@ -309,7 +309,7 @@ module Make
             phi'
         in
         let phi' = Quantifier.eq_guided_elim_loop srk phi' in
-        Log.errorf "PHI' is %a" (Formula.pp srk) phi';
+        Log.formulaf "PHI' is %a" (Formula.pp srk) phi';
         let t3 = time "Star Fin" in
         diff t2 t3 "Rest of star";
         (*if t3 -. t1 > 100.1 then assert false else ();*)
@@ -331,7 +331,7 @@ module Make
     let omega edge =
       match edge with
       | Edge (p_c, p_h, phi) ->
-        Log.errorf "PHI IS %a" (Formula.pp srk) phi;
+        Log.formulaf "PHI IS %a" (Formula.pp srk) phi;
         let exists sym = not (Symbol.Set.mem sym (symbols phi)) in
         let var_to_sym = Hashtbl.create 97 in
         let trs = 
@@ -368,7 +368,7 @@ module Make
             srk
             (Quantifier.miniscope srk phi')
         in
-        Log.errorf "OMEGA IS %a" (Formula.pp srk) phi';
+        Log.formulaf "OMEGA IS %a" (Formula.pp srk) phi';
         Log.errorf "Size of p_h is %n and p_c is %n" (List.length p_h) (List.length p_c);
         let syms = Memo.memo (fun (ind, typ) ->
             Log.errorf "looking for sym %n" ind;
@@ -422,163 +422,223 @@ module Make
       | `Add (edge1, edge2) -> omega_add edge1 edge2
 
 
-    let over_approx_arrays phi =
-      let nums = Memo.memo (fun _ -> mk_symbol srk `TyReal) in
-      let bools = Memo.memo (fun _ -> mk_symbol srk `TyBool) in
-      let mk_op op =
-        match op with
-        | `Eq -> mk_eq
-        | `Lt -> mk_lt
-        | `Leq -> mk_leq
-      in
-      let arith_alg = function
-        | `Select (a, i) -> mk_const srk (nums (`Select(a, i)))
-        | open_term -> ArithTerm.construct srk open_term
-      in
-      let alg = function
-        | `Atom (`Arith (op, x, y)) ->
-          (mk_op op) srk (ArithTerm.eval srk arith_alg x) (ArithTerm.eval srk arith_alg y)
-        | `Atom(`ArrEq (a, b)) ->
-          mk_const srk (bools (`Atom(`ArrEq(a, b))))
-        | open_formula -> Formula.construct srk open_formula
-      in
-      Formula.eval srk alg phi
-
     module Abs = Abstract.MakeAbstractRSY(C)
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
-    let _chc_forward_analysis (type a) (module D : Absd with type t = a) wg edge_weights invs = 
-      let sym_to_ind = Hashtbl.create 97 in
-      let conc_vars = Memo.memo (fun (ind, typ) -> 
-          let s = mk_symbol srk (typ :> typ) in
-          Hashtbl.add sym_to_ind s (ind, typ);
-          s) 
-      in
-      let update ~pre edge ~post =
-        match (PE.open_pathexpr_edge_of edge) with
-        | `Edge (src, dst) ->
-          let weights = Hashtbl.find edge_weights (src, dst) in
-          let symbolified_constrs =
-            List.map (fun (conc, hypo_props, constr) ->
-                let substs = List.map (fun prop ->
-                    if (int_of_symbol prop.symbol) = src
-                    then 
-                      Some (
-                      substitute_const
-                        srk
-                        (fun sym ->
-                           if Hashtbl.mem sym_to_ind sym
-                           then (
-                             let (ind, typ) = Hashtbl.find sym_to_ind sym in
-                             mk_var srk ind typ)
-                           else mk_const srk sym)
-                        (D.formula_of pre))
-                    else Some ((Hashtbl.find invs (int_of_symbol prop.symbol))))
-                    hypo_props
-                in
-                let substs = None :: substs in
-                substitute_rel (conc, hypo_props, constr) substs)
-              weights
-          in
-          let p_conc = let (conc, _, _) = List.hd weights in BatList.combine conc.names (Proposition.typ_of_params conc) in
-          let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
-          let constr =
-            substitute
-              srk
-              (fun (ind, _) ->
-                 if ind < (List.length p_conc)
-                 then mk_const srk (List.nth conc_vars ind)
-                 else assert false)
-              (mk_or srk symbolified_constrs)
-          in
-          Log.errorf "CONSTR IS %a" (Formula.pp srk) constr;
-          let phi = eliminate_arr_eq srk constr in
-          let phi = over_approx_arrays phi in
-          let exists sym = List.mem sym conc_vars in
-          let post' = Abs.abstract ~exists (module D) phi in
-          Log.errorf "POST IS %a" (Formula.pp srk) (D.formula_of post');
-          if D.equal (D.join post' post) post then None else Some (D.join post' post)
-        | _ -> assert false
-      in
-      let init v =
-        if v = start_vert then
-          D.top
+    (* Scalar signs are sets of {negative, zero, positive}.  Arrays and Boolean
+       parameters are not abstracted.  In particular, never replace a read
+       underneath a quantifier by a single free constant. *)
+    module ForwardSign = struct
+      type report = {
+        invariants : (symbol * C.t formula) list;
+        validated : bool;
+        checks : int;
+        unknown : int;
+        updates : int;
+        seconds : float;
+        reason : string;
+        annotation_atoms : int;
+        retained_atoms : int;
+        pruning_checks : int;
+        pruning_seconds : float;
+      }
+
+      exception Budget
+
+      let param_types sym =
+        match typ_symbol srk sym with
+        | `TyBool | `TyFun ([], `TyBool) -> []
+        | `TyFun (args, `TyBool) -> args
+        | _ -> invalid_arg "ForwardSign: not a relation"
+
+      let sign_formula term = function
+        | 0 -> mk_false srk
+        | 1 -> mk_lt srk term (mk_zero srk)
+        | 2 -> mk_eq srk term (mk_zero srk)
+        | 3 -> mk_leq srk term (mk_zero srk)
+        | 4 -> mk_lt srk (mk_zero srk) term
+        | 5 -> mk_not srk (mk_eq srk term (mk_zero srk))
+        | 6 -> mk_leq srk (mk_zero srk) term
+        | 7 -> mk_true srk
+        | _ -> invalid_arg "ForwardSign: invalid sign set"
+
+      let state_formula sym = function
+        | None -> mk_false srk
+        | Some masks ->
+          List.mapi (fun i typ ->
+              match typ with
+              | `TyInt | `TyReal ->
+                sign_formula (mk_var srk i typ) masks.(i)
+              | `TyBool | `TyArr -> mk_true srk)
+            (param_types sym)
+          |> mk_and srk
+
+      let at_offset phi offset =
+        substitute srk (fun (i, typ) -> mk_var srk (i + offset) typ) phi
+
+      let hypothesis_formulas inv (head, body, _) =
+        let _, phis = List.fold_left (fun (offset, phis) prop ->
+            let phi = at_offset (inv prop.symbol) offset in
+            offset + List.length (Proposition.typ_of_params prop), phi :: phis)
+            (List.length (Proposition.typ_of_params head), []) body in
+        phis
+
+      (* Substitute only FREE variables, with fresh symbols local to this rule.
+         Syntax.substitute preserves bound variables and shifts under binders.
+         Head and body arguments occupy distinct consecutive index blocks. *)
+      let grounding () =
+        let symbols = Memo.memo (fun (i, typ) ->
+            mk_symbol srk ~name:("sign_arg_" ^ string_of_int i) (typ :> typ)) in
+        fun phi -> substitute srk (fun v -> mk_const srk (symbols v)) phi
+
+      let lookup invariants sym =
+        match List.assoc_opt sym invariants with
+        | Some phi -> phi
+        | None -> mk_true srk
+
+      (* Separate certificate check against the ORIGINAL constraints, without
+         projected signs, array abstraction, or the forward worklist.  For each
+         rule: constraint AND body invariants => head invariant.  This includes
+         every entry rule and every disconnected/unreachable component. *)
+      let validate_with check context fp invariants =
+        let inv = lookup invariants in
+        List.for_all (fun ((head, _, constraint_) as rule) ->
+            let ground = grounding () in
+            let obligation = mk_and srk
+                (constraint_ :: mk_not srk (inv head.symbol)
+                 :: hypothesis_formulas inv rule) in
+            let solver = SrkZ3.mk_solver ~context srk in
+            SrkZ3.Solver.add solver [ground obligation];
+            check solver [] = `Unsat)
+          fp.rules
+
+      let validate ?(timeout_ms=50) fp invariants =
+        let context = Z3.mk_context [("timeout", string_of_int timeout_ms)] in
+        validate_with SrkZ3.Solver.check context fp invariants
+
+      let infer ?(timeout_ms=50) ?(max_checks=10000) ?(max_seconds=5.) fp =
+        let start = Unix.gettimeofday () in
+        let checks = ref 0 and unknown = ref 0 and updates = ref 0 in
+        let report validated reason invariants = {
+          invariants; validated; checks = !checks; unknown = !unknown;
+          updates = !updates; seconds = Unix.gettimeofday () -. start; reason;
+          annotation_atoms = 0; retained_atoms = 0; pruning_checks = 0;
+          pruning_seconds = 0. } in
+        let check solver assumptions =
+          if !checks >= max_checks || Unix.gettimeofday () -. start >= max_seconds
+          then raise Budget;
+          incr checks;
+          let answer = SrkZ3.Solver.check solver assumptions in
+          if answer = `Unknown then incr unknown;
+          answer in
+        try
+          if timeout_ms <= 0 then invalid_arg "ForwardSign: nonpositive timeout";
+          let context = Z3.mk_context [("timeout", string_of_int timeout_ms)] in
+          let states = Hashtbl.create 97 in
+          let symbols = Symbol.Set.elements (prop_symbols fp) in
+          List.iter (fun sym -> Hashtbl.add states sym None) symbols;
+          let inv sym = state_formula sym (Hashtbl.find states sym) in
+          let rules = Array.of_list fp.rules in
+          let ground = Array.map (fun _ -> grounding ()) rules in
+          let dependents = Hashtbl.create 97 in
+          Array.iteri (fun i (_, body, _) ->
+              List.iter (fun prop ->
+                  let old = try Hashtbl.find dependents prop.symbol with Not_found -> [] in
+                  Hashtbl.replace dependents prop.symbol (i :: old)) body) rules;
+          let pending = Queue.create () in
+          let queued = Array.make (Array.length rules) false in
+          let enqueue i = if not queued.(i) then (queued.(i) <- true; Queue.add i pending) in
+          Array.iteri (fun i _ -> enqueue i) rules;
+          while not (Queue.is_empty pending) do
+            let i = Queue.take pending in
+            queued.(i) <- false;
+            let (head, body, constraint_) as rule = rules.(i) in
+            (* A conjunction with an unreachable predecessor has no successors. *)
+            if List.for_all (fun p -> Hashtbl.find states p.symbol <> None) body then (
+              let old = Hashtbl.find states head.symbol in
+              let types = param_types head.symbol in
+              let already_top = match old with
+                | Some masks -> Array.for_all ((=) 7) masks
+                | None -> false in
+              if not already_top then (
+                let solver = SrkZ3.mk_solver ~context srk in
+                SrkZ3.Solver.add solver
+                  [ground.(i) (mk_and srk (constraint_ :: hypothesis_formulas inv rule))];
+                (* Unknown means possibly reachable, never unreachable. *)
+                if old <> None || check solver [] <> `Unsat then (
+                  let masks = match old with
+                    | Some masks -> Array.copy masks
+                    | None -> Array.of_list (List.map (function
+                        | `TyInt | `TyReal -> 0 | `TyBool | `TyArr -> 7) types) in
+                  List.iteri (fun arg typ -> match typ with
+                      | `TyInt | `TyReal ->
+                        List.iter (fun bit ->
+                            if masks.(arg) land bit = 0 then (
+                              let test = ground.(i) (sign_formula (mk_var srk arg typ) bit) in
+                              if check solver [test] <> `Unsat then
+                                masks.(arg) <- masks.(arg) lor bit)) [1; 2; 4]
+                      | `TyBool | `TyArr -> ()) types;
+                  let next = Some masks in
+                  if old <> next then (
+                    incr updates;
+                    Hashtbl.replace states head.symbol next;
+                    List.iter enqueue
+                      (try Hashtbl.find dependents head.symbol with Not_found -> [])))))
+          done;
+          let invariants = List.map (fun sym -> sym, inv sym) symbols in
+          if validate_with check context fp invariants then
+            report true "inductive" invariants
+          else report false "inductiveness check did not return unsat" []
+        with
+        | Budget -> report false "analysis budget exhausted" []
+        | Z3.Error msg | Invalid_argument msg -> report false ("solver/translation: " ^ msg) []
+
+      let strengthen ?timeout_ms ?max_checks ?max_seconds
+          ?(annotation=`Pruned) ?(prune_checks=1000) fp =
+        let report = infer ?timeout_ms ?max_checks ?max_seconds fp in
+        if not report.validated then fp, report
         else
-          D.bottom
-      in
-      let entry = start_vert in
-      let symbed_invs = WG.forward_analysis wg ~entry ~update ~init in
-      fun vertex ->
-        substitute_const 
-          srk
-          (fun sym ->
-             let (ind, typ) = Hashtbl.find sym_to_ind sym in
-             mk_var srk ind typ)
-          (D.formula_of (symbed_invs vertex))
+          let inv = lookup report.invariants in
+          let start = Unix.gettimeofday () in
+          let candidates = ref 0 and retained = ref 0 and checks = ref 0 in
+          let rec atoms phi = match Formula.destruct srk phi with
+            | `And phis -> List.concat (List.map atoms phis)
+            | `Tru -> []
+            | _ -> [phi] in
+          let context = Z3.mk_context [("timeout", "25")] in
+          let fp = map_rules (fun ((head, body, constraint_) as rule) ->
+              let pre = hypothesis_formulas inv rule in
+              let annotations = match annotation with
+                | `All -> inv head.symbol :: pre
+                | `Pre | `Pruned -> pre in
+              let annotations = List.concat (List.map atoms annotations) in
+              candidates := !candidates + List.length annotations;
+              (* The certificate already proves constraint /\ pre => head.
+                 Output signs can therefore be omitted.  In Pruned mode,
+                 also omit each input fact implied by the original constraint
+                 and facts retained so far.  Unknown or budget exhaustion keeps
+                 the fact.  This preserves the fully annotated rule formula. *)
+              let annotations = if annotation <> `Pruned then annotations else (
+                let ground = grounding () in
+                let solver = SrkZ3.mk_solver ~context srk in
+                SrkZ3.Solver.add solver [ground constraint_];
+                List.filter (fun fact ->
+                    let redundant =
+                      if !checks >= prune_checks || Unix.gettimeofday () -. start >= 1.
+                      then false
+                      else (
+                        incr checks;
+                        SrkZ3.Solver.check solver [mk_not srk (ground fact)] = `Unsat) in
+                    if not redundant then SrkZ3.Solver.add solver [ground fact];
+                    not redundant) annotations) in
+              retained := !retained + List.length annotations;
+              head, body, mk_and srk (constraint_ :: annotations)) fp in
+          fp, { report with annotation_atoms = !candidates;
+                            retained_atoms = !retained;
+                            pruning_checks = !checks;
+                            pruning_seconds = Unix.gettimeofday () -. start }
+    end
 
-
-
-
-
-
-    let _annotate_wg (type a) (module D : Absd with type t = a) wg = 
-      let sym_to_ind = Hashtbl.create 97 in
-      let conc_vars = Memo.memo (fun (ind, typ) -> 
-          let s = mk_symbol srk (typ :> typ) in
-          Hashtbl.add sym_to_ind s (ind, typ);
-          s) 
-      in
-      let update ~pre edge ~post =
-        match edge with
-        | Edge (p_conc, p_hypo, phi) ->
-          List.iter (fun (name, _) -> Log.errorf "Name is %s" name) (p_conc @ p_hypo);
-          let conc_vars = List.mapi (fun ind (_, typ) -> conc_vars (ind, typ)) p_conc in
-          let phi =
-            substitute
-              srk
-              (fun (ind, typ) ->
-                 if ind < (List.length p_conc)
-                 then mk_const srk (List.nth conc_vars ind)
-                 else mk_var srk ind typ)
-              phi
-          in
-          Log.errorf "phi is %a" (Formula.pp srk) phi;
-          let num_conc = List.length p_conc in
-          let pre' =
-            substitute_const
-              srk
-              (fun sym ->
-                 if Hashtbl.mem sym_to_ind sym
-                 then (
-                   let (ind, typ) = Hashtbl.find sym_to_ind sym in
-                   mk_var srk (ind + num_conc) typ)
-                 else mk_const srk sym)
-              (D.formula_of pre)
-          in
-          Log.errorf "ANNOTATION IS %a" (Formula.pp srk) pre';
-          let skolem_vars = Memo.memo (fun (_, typ) ->
-              let s = mk_symbol srk (typ :> typ) in
-              mk_const srk s)
-          in
-          let phi = substitute srk (fun (ind, typ) -> skolem_vars (ind, typ)) (mk_and srk [phi; pre']) in
-
-          let phi = eliminate_arr_eq srk phi in
-          let phi = over_approx_arrays phi in
-          Log.errorf "Now phi is %a" (Formula.pp srk) phi;
-          let exists sym = List.mem sym conc_vars in
-          let post' = Abs.abstract ~exists (module D) phi in
-
-          (*assert (not (D.equal (D.join post' post) D.bottom));*) 
-          if D.equal (D.join post' post) post then None else Some (D.join post' post)
-      in
-      let init v =
-        if v = start_vert then
-          D.top
-        else
-          D.bottom
-      in
-      let entry = start_vert in
-      WG.forward_analysis wg ~entry ~update ~init, sym_to_ind
 
     (* This function converts each stratum of a super-linear CHC to a weighted
      * graph and then computes a path expression that over-approximates the 
@@ -591,7 +651,6 @@ module Make
       let open WeightedGraph in
       let open Proposition in
       let edge_weights = Hashtbl.create 97 in
-      (*let invs = Hashtbl.create 97 in*)
       let ctx = PE.mk_context () in
       let alg = 
         {mul=PE.mk_mul ctx; 
@@ -652,14 +711,6 @@ module Make
           wg
           edges
       in
-      (*if true then (
-        Log.errorf "COMPUTING INVS";
-        let stratum_invs = chc_forward_analysis (module Abs.Sign) wg edge_weights invs in
-        WG.iter_vertex (fun v ->
-            if v = start_vert || v = goal_vert then ()
-            else (Hashtbl.add invs v (stratum_invs v)))
-          wg)
-      else ();*)
       let thunked_path rel = 
         fun () -> (WG.path_weight wg start_vert (int_of_symbol rel)) 
       in
@@ -937,7 +988,7 @@ module Make
     (* Determines which integer fvs are equal in constr, only considering those
      * free fvs that appear in fvcands *)
    (* let determine_eq_int_fvs srk constr fvcands : BatSet.Int.t list =
-      Log.errorf "constr is %a" (Formula.pp srk) constr;
+      Log.formulaf "constr is %a" (Formula.pp srk) constr;
       let fv_classes = Memo.memo (fun a -> BatUref.uref (BatSet.Int.singleton a)) in
       let conjs = match Formula.destruct srk constr with
         | `And conds -> conds
@@ -1051,7 +1102,7 @@ module Make
       in
       let rule_clauses =
         List.map (fun (conc, hypo, constr) ->
-            Log.errorf "DET EQ constr is %a" (Formula.pp srk) constr;
+            Log.formulaf "DET EQ constr is %a" (Formula.pp srk) constr;
             let chcvar_of_fv = Hashtbl.create 97 in
             let congruent_fvs = 
               BatArray.make (List.length (Proposition.names_of conc)) [] 
@@ -1084,9 +1135,9 @@ module Make
             let unusables = List.flatten unusables in
             let make_edges (non_conc_fvs, conc_fvs) =
               List.fold_left (fun edges conc_fv ->
-                  Log.errorf "IN REL %a" (Formula.pp srk) (term_of conc_fv);
+                  Log.formulaf "IN REL %a" (Formula.pp srk) (term_of conc_fv);
                   (List.map (fun non_conc_fv ->
-                       Log.errorf "NON COnc %a" (Formula.pp srk) (term_of non_conc_fv);
+                       Log.formulaf "NON COnc %a" (Formula.pp srk) (term_of non_conc_fv);
                        try mk_and srk [term_of conc_fv; term_of non_conc_fv] with
                        | _ -> mk_false srk) 
                       non_conc_fvs) @
@@ -1105,7 +1156,7 @@ module Make
                 srk
                 (List.map (fun fv -> (mk_not srk (term_of fv))) unusables)
             in
-            Log.errorf "phi is %a" (Formula.pp srk) edges_phi;
+            Log.formulaf "phi is %a" (Formula.pp srk) edges_phi;
             mk_and srk [edges_phi; inconsist_clause]) 
           (Fp.get_rules fp)
       in
@@ -1511,14 +1562,14 @@ module Make
                   (BatSet.Int.mem ind full_painted))
                 fp
             in
-            Log.errorf "CHC here is %a" Fp.pp fp;
+            Log.formulaf "CHC here is %a" Fp.pp fp;
             let subchc_formula = 
               create_offset_formula subchc symb_rel_params offsetcands 
             in
-            List.iter (fun sub -> Log.errorf "Sub formula is %a" (Formula.pp srk) sub) subchc_formula;
+            List.iter (fun sub -> Log.formulaf "Sub formula is %a" (Formula.pp srk) sub) subchc_formula;
 
             let offset_formula = mk_and srk subchc_formula in
-            Log.errorf "Offset formula is %a" (Formula.pp srk) offset_formula;
+            Log.formulaf "Offset formula is %a" (Formula.pp srk) offset_formula;
             let solver = Smt.mk_solver srk in
             Smt.Solver.add solver [offset_formula];
             match Smt.Solver.get_model solver with
@@ -1572,7 +1623,7 @@ module Make
 
 
     let rec check_q_array phi =
-      Log.errorf "phi is %a" (Formula.pp srk) phi;
+      Log.formulaf "phi is %a" (Formula.pp srk) phi;
       match Formula.destruct srk phi with
       | `Quantify (qtyp, name, typ, phi) ->
         if typ = `TyArr then assert false
@@ -1642,7 +1693,7 @@ module Make
 
 
     let apply_offset_candidate constr offsets =
-      Log.errorf "Constr is %a" (Formula.pp srk) constr;
+      Log.formulaf "Constr is %a" (Formula.pp srk) constr;
       Hashtbl.iter (fun k v -> 
         match k, v with
           | Sym sym, Some v -> Log.errorf "Sym is %a and offset is %n" (pp_symbol srk) sym v
@@ -2018,7 +2069,6 @@ module Make
       let open WeightedGraph in
       let open Proposition in
       let edge_weights = Hashtbl.create 97 in
-      (*let invs = Hashtbl.create 97 in*)
       let ctx = PE.mk_context () in
       let alg = 
         {mul=PE.mk_mul ctx; 
@@ -2107,7 +2157,12 @@ module Make
       in
       let entry = start_vert in
       let symbed_invs = WG.forward_analysis wg ~entry ~update ~init in
-      fun vertex -> match (symbed_invs vertex) with Bottom -> assert false | Classes eq -> eq
+      fun vertex -> match (symbed_invs vertex) with
+        | Bottom ->
+          (* False entry rules can leave unreachable loops in the graph.
+           * Supply no equalities to coalesce, preserving their parameters. *)
+          []
+        | Classes eq -> eq
 
 
 
@@ -2158,7 +2213,7 @@ module Make
       in
 
       Fp.map_rules (fun (conc, hypos, constr) ->
-          Log.errorf "Rule is %a" (Fp.pp_rule) (conc, hypos, constr);
+          Log.formulaf "Rule is %a" (Fp.pp_rule) (conc, hypos, constr);
           let constr', _, props, _ = 
             List.fold_left (fun (constr, param_counter, props, total_reduced) prop ->
                 let num_params = List.length (Proposition.typ_of_params prop) in
@@ -2204,7 +2259,7 @@ module Make
 
     let preprocessing fp =
 
-      Log.errorf "ORIG FP is %a" Fp.pp fp;
+      Log.formulaf "ORIG FP is %a" Fp.pp fp;
       let skolemized_vars = BatHashtbl.create 97 in
       let fp' = 
         Fp.mapi_rules (fun ind (conc, hypo, constr) ->
@@ -2264,7 +2319,7 @@ module Make
       let fp = coalesce_eqs fp'3 invs in 
 
       Log.errorf "\n\n\n\n\n\nn\n\\nn\n\n\n\n\n\n\n\n\n\n\n\n\n";
-      Log.errorf "NEW FP is %a" Fp.pp fp;
+      Log.formulaf "NEW FP is %a" Fp.pp fp;
       fp
 
 

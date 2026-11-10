@@ -6,4 +6,4 @@ open Syntax
 
     Unsupported definitions and sets exceeding eight candidates are left
     unchanged. The per-temporary limit is not a global formula-size bound. *)
-val eliminate : 'a context -> 'a formula -> 'a formula
+val eliminate : ?limit:int -> 'a context -> 'a formula -> 'a formula

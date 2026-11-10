@@ -17,6 +17,9 @@ let srk = Ctx.context
 include Log.Make(struct let name = "cra" end)
 
 let forward_inv_gen = ref true
+let array_forward_signs = ref false
+let array_sign_annotation = ref `Pruned
+let array_sign_cleanup = ref false
 let forward_pred_abs = ref false
 let dump_goals = ref false
 let monotone = ref false
@@ -1282,6 +1285,20 @@ let _ =
      Arg.Clear precondition,
      " Synthesize mortal preconditions");
   CmdLine.register_config
+    ("-array-sign-annotation",
+     Arg.Symbol (["all"; "pre"; "pruned"], (function
+         | "all" -> array_sign_annotation := `All
+         | "pre" -> array_sign_annotation := `Pre
+         | _ -> array_sign_annotation := `Pruned)),
+     " Select experimental sign annotation placement");
+  CmdLine.register_config
+    ("-array-sign-cleanup", Arg.Set array_sign_cleanup,
+     " Apply exact cleanup after AMA path summarization (experimental)");
+  CmdLine.register_config
+    ("-array-forward-signs",
+     Arg.Set array_forward_signs,
+     " Check and propagate scalar signs before AMA reachability or termination analysis");
+  CmdLine.register_config
     ("-array-cra-no-singular",
      Arg.Clear Pmfa.OldPmfa.use_singular_predicates,
      " Disable the singular-predicate refinement in array CRA")
@@ -1300,23 +1317,51 @@ i*)
 
 module CHC = Chc.Make(Ctx)
 
+let array_profile () = Stdlib.Sys.getenv_opt "AMA_PROFILE_FORWARD" = Some "1"
+
+let array_stage label f =
+  if not (array_profile ()) then f () else (
+    let start = Unix.gettimeofday () and cpu = Stdlib.Sys.time () in
+    let result = f () in
+    logf ~level:`always "AMA_STAGE %s cpu=%.6f wall=%.6f"
+      label (Stdlib.Sys.time () -. cpu) (Unix.gettimeofday () -. start);
+    result)
+
+let array_size label phi =
+  if array_profile () then
+    logf ~level:`always "AMA_SIZE %s nodes=%d" label (Syntax.size phi);
+  phi
 
 
 let array_analyze file =
 
   let init = time () in
-  let fp = CHC.ChcSrkZ3.parse_file file.filename in
-  let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
+  let fp = array_stage "parse" (fun () -> CHC.ChcSrkZ3.parse_file file.filename) in
+  let fp = array_stage "elim_ite" (fun () -> CHC.ShOffsetAnalysis.elim_ite_chc fp) in
  
-  let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
+  let fp = array_stage "offset" (fun () -> CHC.ShOffsetAnalysis.offset_analysis fp) in
+  let fp = if !array_forward_signs then array_stage "signs" (fun () ->
+      let fp, report = CHC.Fp.ForwardSign.strengthen ~annotation:!array_sign_annotation fp in
+      logf ~level:`always
+        "Forward signs: validated=%b checks=%d unknown=%d updates=%d seconds=%.3f (%s)"
+        report.validated report.checks report.unknown report.updates report.seconds report.reason;
+      if array_profile () then logf ~level:`always
+        "AMA_ANNOTATION candidate=%d retained=%d checks=%d seconds=%.6f"
+        report.annotation_atoms report.retained_atoms report.pruning_checks report.pruning_seconds;
+      fp) else fp in
   let offsetdone = time () in
   diff init offsetdone "offset done";
-  let phi = CHC.Fp.query_vc_condition fp ad in
-  let phi = Syntax.eliminate_ite srk phi in
-  let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
-  let phi = Syntax.eliminate_ite srk phi in
-  let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
-  match Quantifier.simsat srk lia with
+  let phi = array_stage "summarize" (fun () -> CHC.Fp.query_vc_condition fp ad)
+    |> array_size "summary" in
+  let phi = if !array_sign_cleanup then
+      array_stage "cleanup" (fun () -> RuntimeSimplify.cleanup srk phi)
+      |> array_size "cleaned" else phi in
+  let phi = array_stage "array_elim" (fun () ->
+      phi |> Syntax.eliminate_ite srk |> CHC.ShOffsetAnalysis.eliminate_stores
+          |> Syntax.eliminate_ite srk) |> array_size "array_elim" in
+  let lia, _ = array_stage "pmfa" (fun () -> Pmfa.OldPmfa.pmfa_to_lia srk phi) in
+  let lia = array_size "lia" lia in
+  match array_stage "final_solver" (fun () -> Quantifier.simsat srk lia) with
   | `Unsat  -> 
     logf ~level:`always "Safe"
   | `Unknown -> logf ~level:`always "UnknownREAL"
@@ -1329,13 +1374,24 @@ let array_analyze_term file =
   let fp = CHC.ChcSrkZ3.parse_file file.filename in
   let fp = CHC.ShOffsetAnalysis.elim_ite_chc fp in
   let fp = CHC.ShOffsetAnalysis.offset_analysis fp in
+  let fp = if !array_forward_signs then array_stage "signs" (fun () ->
+      let fp, report = CHC.Fp.ForwardSign.strengthen ~annotation:!array_sign_annotation fp in
+      logf ~level:`always
+        "Forward signs: validated=%b checks=%d unknown=%d updates=%d seconds=%.3f (%s)"
+        report.validated report.checks report.unknown report.updates report.seconds report.reason;
+      if array_profile () then logf ~level:`always
+        "AMA_ANNOTATION candidate=%d retained=%d checks=%d seconds=%.6f"
+        report.annotation_atoms report.retained_atoms report.pruning_checks report.pruning_seconds;
+      fp) else fp in
   let offsetdone = time () in
   diff init offsetdone "offset done";
   let phi = CHC.Fp.query_vc_terminates fp ad in
+  let phi = RuntimeSimplify.cleanup srk phi in
   let phi = Syntax.eliminate_ite srk phi in
   let phi = CHC.ShOffsetAnalysis.eliminate_stores phi in
   let phi = Syntax.eliminate_ite srk phi in
   let lia, _ = Pmfa.OldPmfa.pmfa_to_lia srk phi in
+  let lia = RuntimeSimplify.cheap srk lia in
   match Quantifier.simsat srk lia with
   | `Unsat  -> 
     logf ~level:`always "Safe"

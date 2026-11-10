@@ -111,6 +111,12 @@ let errorf fmt =
   if !colorize
   then Format.eprintf ("\x1b[31;1m" ^^ fmt ^^ "\x1b[0m@\n@?")
   else Format.eprintf (fmt ^^ "@\n@?")
+(* Large formula dumps are opt-in; ordinary errors remain unconditional. *)
+let dump_formulas = Sys.getenv_opt "AMA_DUMP_FORMULAS" = Some "1"
+let formulaf fmt =
+  if dump_formulas then errorf fmt
+  else Format.ifprintf Format.err_formatter fmt
+
 let error msg = errorf msg
 let error_pp pp x = errorf "%a" pp x
 

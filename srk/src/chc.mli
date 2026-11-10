@@ -48,6 +48,34 @@ module Make
 
     module type Absd = Abstract.MakeAbstractRSY(C).Domain
 
+    module ForwardSign : sig
+      type report = private {
+        invariants : (symbol * C.t formula) list;
+        validated : bool;
+        checks : int;
+        unknown : int;
+        updates : int;
+        seconds : float;
+        reason : string;
+        annotation_atoms : int;
+        retained_atoms : int;
+        pruning_checks : int;
+        pruning_seconds : float;
+      }
+      (** Infer scalar sign invariants without abstracting arrays/quantifiers.
+          Unknown queries add possible signs. Exhausted budgets or a failed
+          inductiveness check discard all inferred facts. *)
+      val infer : ?timeout_ms:int -> ?max_checks:int -> ?max_seconds:float -> fp -> report
+      (** Check every original Horn rule against a proposed certificate. *)
+      val validate : ?timeout_ms:int -> fp -> (symbol * C.t formula) list -> bool
+      (** Conjoin only checked invariants; return the original fp on failure.
+          Pruned (default) omits output signs already justified by induction and
+          input signs implied by the rule. Unknown pruning queries retain facts.
+          All and Pre are comparison modes for full and input-only annotation. *)
+      val strengthen : ?timeout_ms:int -> ?max_checks:int -> ?max_seconds:float ->
+        ?annotation:[`All | `Pre | `Pruned] -> ?prune_checks:int -> fp -> fp * report
+    end
+
     (** [check srk fp pd] returns unknown if a query relation can
      * be reached in the fp where recursion over-approximated using the 
      * star operator of the provided predomain [pd] and returns no otherwise.*)

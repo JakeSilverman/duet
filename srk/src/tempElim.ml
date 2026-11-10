@@ -1,8 +1,7 @@
 open Syntax
 
 (* Eliminate explicitly defined local arrays without expanding unrelated branches. *)
-let eliminate srk phi =
-  let limit = 8 in
+let eliminate ?(limit=8) srk phi =
   let bounded terms =
     let terms = List.sort_uniq Expr.compare terms in
     if List.length terms <= limit then Some terms else None
@@ -51,4 +50,5 @@ let eliminate srk phi =
       end
     | node -> Formula.construct srk node
   in
-  Formula.eval srk alg phi
+  if limit = 1 then Formula.eval_memo srk alg phi
+  else Formula.eval srk alg phi

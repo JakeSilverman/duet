@@ -919,14 +919,14 @@ does this affect *)
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
     let proj_ind, arr_map, tf_proj, arr_only_trs, symb_consts = projection_with_store_elim srk tf_pmfa eqs_trs new_eqs_consts in
 
-    Log.errorf "Formula with new proj is %a" (Formula.pp srk) (T.formula tf_proj);
+    Log.formulaf "Formula with new proj is %a" (Formula.pp srk) (T.formula tf_proj);
 
     List.iter (fun (a, b) -> Log.errorf "Symbol is %a and %a" (pp_symbol srk) a (pp_symbol srk) b) (TransitionFormula.symbols tf_proj);
     let tf_proj = T.update_formula tf_proj (eliminate_ite srk (T.formula tf_proj)) in
 
     let tf_proj = T.update_formula tf_proj (eliminate_stores srk (T.formula tf_proj)) in
 
-    Log.errorf "PRIOR TO LIA is %a" (Formula.pp srk) (T.formula tf_proj);
+    Log.formulaf "PRIOR TO LIA is %a" (Formula.pp srk) (T.formula tf_proj);
     let lia, _ = pmfa_to_lia srk (T.formula tf_proj) in
 
 
@@ -938,13 +938,13 @@ does this affect *)
 
     let lia = Quantifier.eq_guided_elim_loop srk lia in
 
-    Log.errorf "Phi in abstract is %a" (Formula.pp srk) lia;
+    Log.formulaf "Phi in abstract is %a" (Formula.pp srk) lia;
 
     let lia, skolems = skolemize_eh_alt srk lia in 
     let lia = Quantifier.miniscope srk lia in
     let ground_lia = Quantifier.mbp_qe_inplace srk lia in
 
-    Log.errorf "Ground is is %a" (Formula.pp srk) ground_lia;
+    Log.formulaf "Ground is is %a" (Formula.pp srk) ground_lia;
 
 
 
@@ -967,7 +967,7 @@ does this affect *)
 
     let at_most_single_write srk write noop trs =
 
-      Log.errorf "NOOP IS %a" (Formula.pp srk) (T.formula noop);
+      Log.formulaf "NOOP IS %a" (Formula.pp srk) (T.formula noop);
       let exp = mk_symbol srk ~name:"exp" `TyInt in
 
       let noop_star =
@@ -1031,7 +1031,7 @@ does this affect *)
         rewrite srk ~down:(nnf_rewriter srk) noop
       in
       
-      Log.errorf "write is %a" (Formula.pp srk) write;
+      Log.formulaf "write is %a" (Formula.pp srk) write;
       let exists s = not (Symbol.Set.mem s obj.skolems) in
       let write = T.make ~exists write obj.iter_trs in
       let noop = T.make ~exists noop obj.iter_trs in
@@ -1317,9 +1317,9 @@ does this affect *)
         (Iteration.Product(Iteration.GuardedTranslation)(Iteration.PolyhedronGuard))
 (*
 let phase_mp_ported srk candidate_predicates tf nonterm =
-  Log.errorf "Formula in phase mp is %a" (Formula.pp srk)(TF.formula tf);
+  Log.formulaf "Formula in phase mp is %a" (Formula.pp srk)(TF.formula tf);
   let star tf =
-    Log.errorf "Star of %a" (Formula.pp srk) (TF.formula tf);
+    Log.formulaf "Star of %a" (Formula.pp srk) (TF.formula tf);
     let module E = LossyTranslation in
     let k = mk_symbol srk `TyInt in
     let exists x = x != k && (TF.exists tf) x in
@@ -1344,7 +1344,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
 
 
     let mp srk tf =
-      Log.errorf "FORMULA entry tf is %a" (Formula.pp srk) (T.formula tf);
+      Log.formulaf "FORMULA entry tf is %a" (Formula.pp srk) (T.formula tf);
       (*let sym_to_var = Hashtbl.create 991 in
 
         let of_symbol sym =
@@ -1392,13 +1392,13 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
           (abs.proj_ind :: abs.symb_consts)
           (abs.iter_trs @ (Symbol.Map.bindings abs.eqs_ints_trs))
       in
-      Log.errorf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);
+      Log.formulaf "Formula reduc is %a" (Formula.pp srk) (T.formula tf_iter);
       let mp_lia = 
         (** over-approximate possibly non-terminating conditions for a transition *)
         begin
           let open Syntax in
           let nonterm tf =
-            Log.errorf "entry nonterm tf is %a" (Formula.pp srk) (T.formula tf);
+            Log.formulaf "entry nonterm tf is %a" (Formula.pp srk) (T.formula tf);
             let pre =
               let fresh_skolem =
                 Memo.memo (fun sym -> Log.errorf "Dupping sym %a" (pp_symbol srk) sym;
@@ -1411,7 +1411,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
               in
               substitute_const srk subst (T.formula tf)
             in
-            Log.errorf "pre is %a" (Formula.pp srk) pre;
+            Log.formulaf "pre is %a" (Formula.pp srk) pre;
             let llrf, has_llrf =
               if !termination_llrf then
                 if TLLRF.has_llrf srk tf then
@@ -1449,7 +1449,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
                 | _ -> [mp]
               else []
             in
-            Log.errorf " exp is %a" (Formula.pp srk) (mk_and srk exp);
+            Log.formulaf " exp is %a" (Formula.pp srk) (mk_and srk exp);
             let result =
               Syntax.mk_and srk (llrf@dta@exp)
             in
@@ -1465,7 +1465,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
                   let x = mk_const srk x in
                   let x' = mk_const srk x' in
 
-                  Log.errorf "x is %a" (ArithTerm.pp srk) x;
+                  Log.formulaf "x is %a" (ArithTerm.pp srk) x;
                   [mk_lt srk x x';
                    mk_lt srk x' x;
                    mk_eq srk x x'])
@@ -1480,20 +1480,20 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       in
 
       let mp_lia =  rewrite srk ~down:(nnf_rewriter srk) mp_lia in
-      Log.errorf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
+      Log.formulaf "Formula MP LIA here is %a" (Formula.pp srk) mp_lia;
       let mp_lia = 
         mk_exists_consts
           srk
           (fun s -> List.mem s flatten_trs)
           mp_lia
       in 
-      Log.errorf "Formula MP LIA POST EXIST is %a" (Formula.pp srk) mp_lia;
+      Log.formulaf "Formula MP LIA POST EXIST is %a" (Formula.pp srk) mp_lia;
 
       let mp_lia = Quantifier.eq_guided_elim_loop srk mp_lia in
 
 
       let mp_lia = Quantifier.mbp_qe_inplace srk mp_lia in
-      Log.errorf "Formula MP LIA MINI EXIST is %a" (Formula.pp srk) mp_lia;
+      Log.formulaf "Formula MP LIA MINI EXIST is %a" (Formula.pp srk) mp_lia;
 
 
 
@@ -1507,7 +1507,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       in
       let substed = substitute_const srk map mp_lia in
       let res = (mk_forall srk `TyInt substed) in
-      Log.errorf "Result after MP is %a" (Formula.pp srk) res;
+      Log.formulaf "Result after MP is %a" (Formula.pp srk) res;
       res
 
 

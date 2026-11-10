@@ -87,6 +87,12 @@ module HC = BatHashcons.MakeTable(struct
       && List.length args == List.length args'
       && List.for_all2 (fun x y -> x.tag = y.tag) args args'
     let hash (Node (label, args, _)) =
+      (* Equality ignores bound-variable names, so hashing must ignore them too. *)
+      let label = match label with
+        | Exists (_, typ) -> Exists ("", typ)
+        | Forall (_, typ) -> Forall ("", typ)
+        | label -> label
+      in
       Hashtbl.hash (label, List.map (fun sexpr -> sexpr.tag) args)
   end)
 

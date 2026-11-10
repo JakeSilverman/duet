@@ -1,0 +1,1 @@
+(test (name test_forward_sign) (modes native) (link_flags (:standard) (:include ../link_flags.sexp)) (libraries srk oUnit))
