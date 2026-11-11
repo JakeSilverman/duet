@@ -2862,7 +2862,7 @@ let eq_guided_qe_new srk phi =
 
 (* Given a list of equalities, find a candidate
  * term to substitute in for var 0 *)
-let get_subst_cands srk eqs = 
+let get_subst_cands srk typ eqs =
   let candidates = 
     List.filter_map (fun (t1, t2) ->
         match Term.destruct srk t1, Term.destruct srk t2 with
@@ -2920,8 +2920,15 @@ let get_subst_cands srk eqs =
             | _ -> None
           end) eqs
   in
-  if List.length candidates = 0 then None
-  else Some (List.hd candidates)
+  (* A solved arithmetic equality may have a rational right-hand side.
+     Substituting it for an integer binder would discard its integrality
+     condition (e.g. exists x:Int. 2*x = y). Keep that quantifier instead. *)
+  List.find_opt (fun term ->
+      not (Hashtbl.mem (free_vars term) 0) &&
+      match typ, Term.typ srk term with
+      | `TyInt, `TyInt | `TyReal, (`TyInt | `TyReal) | `TyArr, `TyArr -> true
+      | _ -> false)
+    candidates
 
 
 let normalized_intersection srk lsts =
@@ -3016,7 +3023,11 @@ let eq_guided_qe_helper srk phi =
           Some (mk_false srk :> ('a, typ_fo) expr ))
         else None
       | _ -> 
-        begin match get_subst_cands srk eqs with
+        (* exists x. x=t /\ P(x) = P(t), whereas
+           forall x. x!=t \/ P(x) = P(t). Positive equalities are not
+           definitions of a universally quantified variable. *)
+        let candidates = if qtyp = `Exists then eqs else diseqs in
+        begin match get_subst_cands srk typ candidates with
         | None -> None
         | Some v -> Some (v :>('a, typ_fo) expr) 
         end

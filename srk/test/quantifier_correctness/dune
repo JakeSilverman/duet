@@ -1,0 +1,5 @@
+(test
+ (name test_quantifier_correctness)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk oUnit))

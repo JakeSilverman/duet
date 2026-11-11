@@ -135,9 +135,22 @@ Raw `Safe` output does not independently certify the C-to-CHC translation, and
 `UnknownSAT` is not a validated C counterexample.
 
 Focused regression suites are under `srk/test/{chc_unreachable,quantifier_alpha,
-temp_elim,runtime_smoke,forward_sign}`. They cover unreachable loops, consistent
+temp_elim,runtime_smoke,forward_sign,quantifier_correctness}`. They cover unreachable loops, consistent
 hashing of quantified formulas, exact cleanup and factoring, formula logging,
 and forward-sign inference, certificate rejection, and annotation pruning.
+
+### Selected PLDI configuration
+
+The selected configuration uses the full quantifier soundness correction on the
+forward-sign baseline. Equality-guided elimination respects existential versus
+universal polarity, binder scope, and integer witness types. The later opposing-
+bound, affine, and compositional cleanup experiments are excluded from this
+branch. Existing exact cleanup and factoring remain.
+
+The 565-attempt official campaign and its retained audit qualifications are
+recorded in [docs/PLDI-results.md](docs/PLDI-results.md). Its measured executable
+is preserved in the results archive; rebuilding this source need not reproduce
+its binary hash or its single-run timings.
 
 Architecture
 ============
