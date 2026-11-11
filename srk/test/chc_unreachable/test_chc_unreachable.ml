@@ -39,6 +39,11 @@ let preprocess fp =
 
 let assert_equivalent a b =
   let differs = mk_or srk [and_ [a; mk_not srk b]; and_ [b; mk_not srk a]] in
+  (* Rule parameters are open de Bruijn variables, which Z3 cannot solve
+     directly. Give the same parameter the same arbitrary constant on both
+     sides, so this checks equivalence for all parameter valuations. *)
+  let parameter = Memo.memo (fun (_, typ) -> mk_const srk (mk_symbol srk (typ :> typ))) in
+  let differs = substitute srk parameter differs in
   assert_equal `Unsat (Smt.is_sat srk differs)
 
 let assert_query expected fp =

@@ -192,7 +192,7 @@ module Make
     and add x y =
       match x, y with
       | Edge (fvc, fvh, phix), Edge (_, _, phiy) -> 
-        Edge (fvc, fvh, mk_or srk [phix; phiy])
+        Edge (fvc, fvh, RuntimeSimplify.cheap srk (mk_or srk [phix; phiy]))
 
     and mul x y =
       match x, y with
@@ -403,7 +403,7 @@ module Make
     let omega_add s1 s2 =
       match s1, s2 with
       | OEdge (v1, phi1), OEdge (_, phi2) ->
-        OEdge (v1, mk_or srk [phi1; phi2])
+        OEdge (v1, RuntimeSimplify.cheap srk (mk_or srk [phi1; phi2]))
 
     type ('a,'b) open_omega_pathexpr =
       [ `Omega of 'a

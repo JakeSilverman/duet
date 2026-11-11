@@ -1299,6 +1299,9 @@ let _ =
      Arg.Set array_forward_signs,
      " Check and propagate scalar signs before AMA reachability or termination analysis");
   CmdLine.register_config
+    ("-array-term-equality", Arg.Set Pmfa.OldPmfa.use_termination_equality_opt,
+     " Experimentally eliminate unchanged state in array termination analysis");
+  CmdLine.register_config
     ("-array-cra-no-singular",
      Arg.Clear Pmfa.OldPmfa.use_singular_predicates,
      " Disable the singular-predicate refinement in array CRA")

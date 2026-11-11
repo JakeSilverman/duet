@@ -1,5 +1,9 @@
 Duet
 ====
+
+This branch preserves **unused post-PLDI optimization experiments**. The selected
+implementation is on `ama-pldi-2027`. See [the investigation note](docs/post-pldi-optimizations.md)
+for scope, mixed runtime results, validation and deferred work.
 Duet is a static analysis tool designed for analyzing concurrent programs.
 
 Building
@@ -128,9 +132,21 @@ Pruned annotations omit sign facts already implied by the rule and its incoming
 invariants. `-array-sign-cleanup` enables exact formula cleanup after reachability
 summarization; termination already applies that cleanup.
 
+Compositional cleanup retains affine arithmetic normalization, opposing-bound
+simplification, equality-guided elimination, and Boolean flattening, sorting,
+duplicate removal, and constant folding. Boolean absorption (such as
+`A AND (A OR B) -> A`) is intentionally omitted: despite preserving equivalence,
+it regressed downstream termination runtime in diagnostic probes. Investigation
+of that interaction is deferred; the recorded full-suite runs showed mixed results.
+
 Formula dumps are disabled by default; set `AMA_DUMP_FORMULAS=1` to enable them.
 Set `AMA_PROFILE_FORWARD=1` for optional stage timing and formula-size diagnostics.
-The equality-transition optimization remains disabled in termination analysis.
+The equality-transition optimization is disabled by default in termination
+analysis. This experimental checkout adds `-array-term-equality` to test its
+restoration: eliminated fixed parameters are reconnected to the loop's initial
+state, array-equality orientation is normalized, and unchanged arrays remain
+available when projecting stores into other arrays. The experiment only changes
+the termination summary; finite-loop abstraction retains its existing behavior.
 Raw `Safe` output does not independently certify the C-to-CHC translation, and
 `UnknownSAT` is not a validated C counterexample.
 
@@ -138,14 +154,18 @@ Focused regression suites are under `srk/test/{chc_unreachable,quantifier_alpha,
 temp_elim,runtime_smoke,forward_sign,quantifier_correctness}`. They cover unreachable loops, consistent
 hashing of quantified formulas, exact cleanup and factoring, formula logging,
 and forward-sign inference, certificate rejection, and annotation pruning.
+`srk/test/term_equality/test_term_equality.exe` checks the equality-transition
+prototype on terminating and nonterminating scalar/array loops, including its
+interaction with forward signs. `probe_term_equality.exe off` and `on` print
+the small transition summaries used to diagnose the original failure.
 
 ### Selected PLDI configuration
 
-The selected configuration uses the full quantifier soundness correction on the
+The selected configuration on `ama-pldi-2027` uses the full quantifier soundness correction on the
 forward-sign baseline. Equality-guided elimination respects existential versus
 universal polarity, binder scope, and integer witness types. The later opposing-
-bound, affine, and compositional cleanup experiments are excluded from this
-branch. Existing exact cleanup and factoring remain.
+bound, affine, and compositional cleanup experiments are excluded from the official
+branch; this research branch preserves them. Existing exact cleanup and factoring remain.
 
 The 565-attempt official campaign and its retained audit qualifications are
 recorded in [docs/PLDI-results.md](docs/PLDI-results.md). Its measured executable

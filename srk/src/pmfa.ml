@@ -111,6 +111,7 @@ module OldPmfa = struct
   include Log.Make(struct let name = "srk.array:" end)
 
   let use_singular_predicates = ref true
+  let use_termination_equality_opt = ref false
 
 
   let arr_trs srk tf = 
@@ -125,7 +126,7 @@ module OldPmfa = struct
   (* Projects an array transition formula [tf] down to a single symbolic index
    * [j]. The dynamics of element [j] of array transition variables (a, a') 
    * are captured with the integer transition variables ([map] a, [map] a'). *)
-  let projection_with_store_elim srk tf eqs extras =
+  let projection_with_store_elim ?(for_termination=false) srk tf eqs extras =
     let map = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
     let rmap = Hashtbl.create (List.length (arr_trs srk tf) * 8 / 3) in
 
@@ -145,6 +146,11 @@ module OldPmfa = struct
         Hashtbl.add map z a;
 
         Hashtbl.add map z' a';
+        if for_termination then (
+          (* Stores into other arrays may read this unchanged array. Both
+             names denote the same projected constant at index j. *)
+          Hashtbl.add rmap a z';
+          Hashtbl.add rmap a' z');
         trs,
         arr_only_trs,
         z' :: symb_consts,
@@ -392,14 +398,15 @@ module OldPmfa = struct
 
 
     let phi = eliminate_ite srk phi in
-    let phi = rewrite srk ~down:(nnf_rewriter srk) phi in
+    let phi = rewrite srk ~down:(nnf_rewriter srk) phi
+      |> RuntimeSimplify.cheap srk in
 
     let mfa, new_vars = to_mfa srk phi in
     let lia, syms = mfa_to_lia srk mfa in
     let lia = 
       mk_exists_consts srk (fun sym -> (not (Symbol.Set.mem sym new_vars))) lia
     in
-    lia, Symbol.Set.union syms new_vars
+    RuntimeSimplify.cheap srk lia, Symbol.Set.union syms new_vars
 
 
   (* Integer maps with a constant time "decrement all keys by k" operation *)
@@ -837,7 +844,7 @@ module OldPmfa = struct
 
 
 
-    let abstract_with_equality_transition_opt use_equality_transition_opt srk tf =
+    let abstract_with_equality_transition_opt ?(for_termination=false) use_equality_transition_opt srk tf =
       let t1 = time "In abstract" in
 
 
@@ -856,7 +863,8 @@ does this affect *)
               if List.mem (a, b) (T.symbols tf) then (
                 Symbol.Map.add a b eqs_trs)
               else if List.mem (b, a) (T.symbols tf) then (
-                Symbol.Map.add a b eqs_trs)
+                if for_termination then Symbol.Map.add b a eqs_trs
+                else Symbol.Map.add a b eqs_trs)
               else eqs_trs)
             Symbol.Map.empty
             eqs
@@ -917,7 +925,7 @@ does this affect *)
 
     let tf_pmfa = T.update_formula tf phi in
     let tf_pmfa = T.update_symbols tf_pmfa !trs in
-    let proj_ind, arr_map, tf_proj, arr_only_trs, symb_consts = projection_with_store_elim srk tf_pmfa eqs_trs new_eqs_consts in
+    let proj_ind, arr_map, tf_proj, arr_only_trs, symb_consts = projection_with_store_elim ~for_termination srk tf_pmfa eqs_trs new_eqs_consts in
 
     Log.formulaf "Formula with new proj is %a" (Formula.pp srk) (T.formula tf_proj);
 
@@ -1353,7 +1361,7 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
         else
           None
         in*)
-      let abs = AD.abstract_with_equality_transition_opt false srk tf in
+      let abs = AD.abstract_with_equality_transition_opt ~for_termination:true !use_termination_equality_opt srk tf in
 
       let arr_vars_eq = 
         mk_and
@@ -1495,15 +1503,24 @@ let phase_mp_ported srk candidate_predicates tf nonterm =
       let mp_lia = Quantifier.mbp_qe_inplace srk mp_lia in
       Log.formulaf "Formula MP LIA MINI EXIST is %a" (Formula.pp srk) mp_lia;
 
-
-
+      (* Elimination uses post-state names as fixed parameters internally.
+         Reconnect them to the initial state before composing this possibly
+         nonterminating condition with the path leading into the loop. *)
+      let post_to_pre =
+        List.fold_left (fun map (pre, post) -> Symbol.Map.add post pre map)
+          Symbol.Map.empty
+          (Symbol.Map.bindings abs.eqs_trs @ Symbol.Map.bindings abs.eqs_ints_trs)
+      in
+      let initial_symbol sym =
+        try Symbol.Map.find sym post_to_pre with Not_found -> sym
+      in
       let map sym =  
         if sym = abs.proj_ind
         then mk_var srk 0 `TyInt
         else if Hashtbl.mem abs.arr_map sym 
-        then mk_select srk (mk_const srk (Hashtbl.find abs.arr_map sym)) 
+        then mk_select srk (mk_const srk (initial_symbol (Hashtbl.find abs.arr_map sym)))
             (mk_var srk 0 `TyInt) 
-        else mk_const srk sym
+        else mk_const srk (initial_symbol sym)
       in
       let substed = substitute_const srk map mp_lia in
       let res = (mk_forall srk `TyInt substed) in

@@ -1,0 +1,13 @@
+(executable
+ (name probe_term_equality)
+ (modules probe_term_equality)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk))
+
+(test
+ (name test_term_equality)
+ (modules test_term_equality)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk oUnit))

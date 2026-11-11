@@ -1,0 +1,41 @@
+(executable
+ (name profile_termination)
+ (modules profile_termination)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk))
+
+(executable
+ (name probe_simplifiers)
+ (modules probe_simplifiers)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk))
+
+(executable
+ (name inspect_substring)
+ (modules inspect_substring tracedChc)
+ (preprocess (pps ppx_deriving.ord ppx_deriving.eq ppx_deriving.show))
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk formula_audit_helpers))
+
+(library
+ (name formula_audit_helpers)
+ (wrapped false)
+ (modules formulaTrace formulaProbe)
+ (libraries srk))
+
+(executable
+ (name replay_formula)
+ (modules replay_formula)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk formula_audit_helpers))
+
+(executable
+ (name check_cleanup)
+ (modules check_cleanup)
+ (modes native)
+ (link_flags (:standard) (:include ../link_flags.sexp))
+ (libraries srk))

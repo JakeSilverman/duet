@@ -2994,7 +2994,8 @@ let normalized_intersection srk lsts =
 let eq_guided_qe_helper srk phi =
   Log.formulaf "ENTERIN WITH phi of %a" (Formula.pp srk) phi;
   let changed = ref false in
-  let phi = Syntax.eliminate_ite srk phi in
+  let phi = Syntax.eliminate_ite srk phi |> RuntimeSimplify.cheap srk in
+  let phi = BoundSimplify.simplify srk phi |> RuntimeSimplify.cheap srk in
   let intersect lsts = normalized_intersection srk lsts in
   let union lsts = List.flatten lsts in
 
@@ -3166,7 +3167,7 @@ let eq_guided_qe_helper srk phi =
       (free_vars phi)
       IncMap.empty
   in
-  let res = reconstruct map deconstructed in
+  let res = reconstruct map deconstructed |> RuntimeSimplify.cheap srk in
   res, !changed
 
 
