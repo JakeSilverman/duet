@@ -1,26 +1,50 @@
 # Selected AMA PLDI results
 
-Jake selected campaign `ama-correction-only-all565-official-300s-20261111T010625Z`
-on November 10, 2026 (Los Angeles). This is the correctness-fix-only source
-configuration on the earlier forward-sign baseline, with older runtime fixes
-retained. Later bounds, affine, compositional Boolean, and extra pre-QE cleanup
-patches are excluded. Termination equality-transition optimization remains off.
+Jake selected campaign `ama-official-seahorn-tapis-all565-300s-20261112T062304Z`
+on November 12, 2026. It is the soundness-correction source of commit
+`f0a7259ac5e0ab58e8651404b909adbb7314ae0d` plus four production-code changes,
+measured as one binary on both CHC frontends:
 
-The only production-code difference from commit
-`27e36d0d42a9daba843c39ecc2d5e0a673c56b75` is `srk/src/quantifier.ml`.
-The 42 added quantifier regressions check semantic equivalence, including
-polarity, integer divisibility, nested binders, arrays, and Boolean quantifiers.
-They do not require optional optimization-specific output shapes.
+- `srk/src/chc.ml`: drop vacuous clauses whose matrix simplifies to `true`
+  (dead branches in TAPIS-frontend CHCs previously crashed the reader).
+- `srk/src/runtimeSimplify.ml`: `cheap` (from `ama-post-pldi-optimizations`)
+  orders And/Or operands and linear-sum terms by a structural digest instead of
+  hash-consing order (ties fall back to the internal order), normalizes affine
+  sums, flattens nested And/Or, and keeps real-sorted operands real.
+- `srk/src/iteration.ml`: apply `cheap` before `simplify_dda`.
+- `srk/src/pmfa.ml`: in `decon_store`, an array that is not a transition array
+  (e.g. a SeaHorn memory temporary) leaves its array equation unprojected
+  instead of raising `Not_found`.
+
+Later bounds, affine, compositional Boolean and extra pre-QE cleanup patches
+remain excluded. Termination equality-transition optimization remains off.
+
+SeaHorn frontend (all original tasks):
 
 | Arm | Tasks | Proven | Unknown | Errors | Timeouts | CPU seconds |
 |---|---:|---:|---:|---:|---:|---:|
-| AMA reachability | 200 | 6 | 186 | 8 | 0 | 380.041405 |
-| AMA + Singular reachability | 200 | 138 | 54 | 8 | 0 | 668.590296 |
-| AMA + Singular termination | 165 | 135 | 20 | 9 | 1 | 1057.181240 |
+| AMA reachability | 200 | 6 | 186 | 8 | 0 | 239.931668 |
+| AMA + Singular reachability | 200 | 138 | 54 | 8 | 0 | 609.211373 |
+| AMA + Singular termination | 165 | 138 | 21 | 5 | 1 | 1080.841828 |
 
-Every task kept its outcome versus the immediately preceding bounds-plus-affine
-campaign. CPU changes were +39.90%, -19.46%, and +2.08%, respectively. These are
-single attempts with fresh native CHCs, not a controlled causal timing claim.
+Against the previous selection (`ama-correction-only-all565-official-300s-20261111T010625Z`) no reachability verdict
+changed. Termination gained insertionsort-alloca-1, insertionsort-alloca-2 and
+java_Nested-alloca (previously `Not_found`); twisted-alloca went from `Not_found`
+to a timeout and openbsd_cstrstr-alloca-2 from a timeout to unknown.
+
+TAPIS frontend (same binary; TAPIS e8d7d7b0 for Array84 and e8d7d7b0 plus
+vector-argument-index.patch for Vector9, rewrite on; all 186 CHC sets are
+clause-identical to those given to TAPIS, VAPHOR and Spacer):
+
+| Suite | Arm | Tasks | Proven | Unknown | Errors |
+|---|---|---:|---:|---:|---:|
+| Array | AMA | 84 | 1 | 72 | 11 |
+| Array | AMA + Singular | 84 | 50 | 23 | 11 |
+| Vector | AMA | 9 | 0 | 0 | 9 |
+| Vector | AMA + Singular | 9 | 0 | 0 | 9 |
+
+All 9 Vector9 CHC systems from TAPIS are non-linear (shared procedure
+summaries), which AMA does not support.
 
 Flags: `-array-forward-signs -array-sign-annotation pruned -array-sign-cleanup`,
 plus `-array-cra` for reachability or `-array-term` for termination. The
@@ -32,17 +56,19 @@ All original tasks are retained, including the approved corrected `strcat_len`.
 
 All 108 fresh test cases and 92 control invocations passed. The independent
 integrity audit verified all 565 final XML rows and unchanged inputs, candidate,
-tools, harness, flags and fresh controls. Six reachability frontend structural
+tools, harness, flags and fresh controls. 4 reachability frontend structural
 comparisons remain unresolved; the original final audit remains `passed=false`.
 Official selection does not resolve those comparisons or rewrite that audit.
-Termination final and official audits passed.
+Termination final and official audits passed. Before selection, the `pmfa.ml`
+change was checked on five non-terminating mutants of affected termination
+tasks: none was claimed terminating.
 
 `soundness_validated=false`: these are raw AMA proof claims; UnknownSAT does
 not establish a concrete C counterexample. C/SeaHorn translation, finite
 arithmetic, overflow, memory safety and ILP32/LP64 caveats remain.
 
 The complete archive in the local PLDI Official Results folder retains sources,
-CHCs, controls, logs, provenance, timings and final XML. All 16,599 files
-(800,281,821 bytes) were checksum-verified. The measured Linux executable SHA-256
-is `414e35a2f2c1771887ccd0dfb1546d3b83d8ec73b3f161713a61f35443ff5a40`.
+CHCs, controls, logs, provenance, timings and final XML. All 19,883 files
+(1,043,923,399 bytes) were checksum-verified. The measured Linux executable SHA-256
+is `b835215f317646e85a13c79a1de13fcd83cf206b1ecded4d5d3017354859617e`.
 Its archive, rather than any subsequent rebuild, is the timing artifact.

@@ -901,6 +901,12 @@ module Make
         let rule = formula_of_z3 srk ~sym_of_decl rule in
         let qnf_rule = Formula.prenex srk rule in
         let qpf_rev, matrix = detach_qpf qnf_rule in
+        (* A clause whose matrix simplifies to true (e.g., its body contains a
+         * constant-false guard from a dead branch) is valid and constrains
+         * nothing, so it is dropped rather than parsed. *)
+        match Formula.destruct srk matrix with
+        | `Tru -> None
+        | _ ->
         let qpf = List.rev qpf_rev in
         let hypo, conc_prop = detach_conc matrix in
         let hypo_props, constr = detach_hypo_props hypo in
@@ -927,10 +933,10 @@ module Make
             (List.rev qinfos)
         in
         let constr = mk_and srk (constr :: phis) in
-        List.hd props, List.tl props, constr
+        Some (List.hd props, List.tl props, constr)
       in
       let parse_query query = sym_of_decl (Z3.Expr.get_func_decl query) in
-      let rules = List.map parse_rule (Z3.Fixedpoint.get_rules z3fp) in
+      let rules = BatList.filter_map parse_rule (Z3.Fixedpoint.get_rules z3fp) in
       let rules =
         List.filter
           (fun (c, hypos, _) ->

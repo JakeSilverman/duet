@@ -396,7 +396,7 @@ module GuardedTranslation = struct
       in                                                                     
       let phi = Quantifier.eq_guided_elim_loop srk phi in                    
       let phi = Quantifier.mbp_qe_inplace srk phi in                         
-      SrkSimplify.simplify_dda srk (substitute_map srk sym_to_var phi)       
+      SrkSimplify.simplify_dda srk (RuntimeSimplify.cheap srk (substitute_map srk sym_to_var phi))
 
       (*Quantifier.mbp
         srk

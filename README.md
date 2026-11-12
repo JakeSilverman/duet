@@ -145,7 +145,11 @@ The selected configuration uses the full quantifier soundness correction on the
 forward-sign baseline. Equality-guided elimination respects existential versus
 universal polarity, binder scope, and integer witness types. The later opposing-
 bound, affine, and compositional cleanup experiments are excluded from this
-branch. Existing exact cleanup and factoring remain.
+branch. Existing exact cleanup and factoring remain. On top of that, the CHC
+reader drops vacuous clauses, `cheap` simplification orders operands by a
+structural digest rather than hash-consing order and runs before `simplify_dda`,
+and array projection leaves equations over non-transition (temporary) arrays
+unprojected.
 
 The 565-attempt official campaign and its retained audit qualifications are
 recorded in [docs/PLDI-results.md](docs/PLDI-results.md). Its measured executable

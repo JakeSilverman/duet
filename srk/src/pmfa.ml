@@ -183,7 +183,12 @@ module OldPmfa = struct
           | None -> None
         end
       | `Var _ -> None
-      | `App (a, []) -> Some (mk_const srk (Hashtbl.find rmap a))
+      | `App (a, []) ->
+        (* Arrays without a projected copy (e.g. temporaries) keep the
+           original array equality unprojected, as for bound arrays. *)
+        (match Hashtbl.find_opt rmap a with
+         | Some z -> Some (mk_const srk z)
+         | None -> None)
       | `Ite _ -> assert false
       | _ -> assert false
     in
